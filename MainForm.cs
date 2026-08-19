@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 
 namespace CampTransfer;
 
@@ -11,6 +12,13 @@ public sealed class MainForm : Form
     private readonly DataGridView _grid = new();
     private readonly ComboBox _destinationBox = new();
     private readonly ComboBox _speedBox = new();
+    private readonly ComboBox _whenFinishedBox = new();
+    private readonly CheckBox _pauseAfterCurrentBox = new()
+    {
+        Text = "Pause after current",
+        AutoSize = true,
+        Margin = new Padding(10, 7, 2, 0)
+    };
     private readonly Button _startButton = new() { Text = "Start", AutoSize = true };
     private readonly Button _pauseButton = new() { Text = "Pause", AutoSize = true, Enabled = false };
     private readonly Button _cancelButton = new() { Text = "Cancel Current", AutoSize = true, Enabled = false };
@@ -48,6 +56,7 @@ public sealed class MainForm : Form
         RestoreSettings();
         UpdateSpeedLimitFromText();
         _engine.GetSpeedLimitBytesPerSecond = () => _speedLimitBytesPerSecond;
+        _engine.ShouldStopAfterCurrent = () => _pauseAfterCurrentBox.Checked;
         UpdateStatus();
     }
 
@@ -110,17 +119,19 @@ public sealed class MainForm : Form
         var addFilesButton = new Button { Text = "Add Files", AutoSize = true };
         var addFolderButton = new Button { Text = "Add Folder", AutoSize = true };
         var removeButton = new Button { Text = "Remove", AutoSize = true };
+        var clearCompletedButton = new Button { Text = "Clear Completed", AutoSize = true };
         var upButton = new Button { Text = "Move Up", AutoSize = true };
         var downButton = new Button { Text = "Move Down", AutoSize = true };
 
         toolbar.Controls.Add(addFilesButton);
         toolbar.Controls.Add(addFolderButton);
         toolbar.Controls.Add(removeButton);
+        toolbar.Controls.Add(clearCompletedButton);
         toolbar.Controls.Add(upButton);
         toolbar.Controls.Add(downButton);
         toolbar.Controls.Add(new Label { Text = "   Upload limit:", AutoSize = true, Margin = new Padding(10, 8, 4, 0) });
 
-        _speedBox.Width = 165;
+        _speedBox.Width = 145;
         _speedBox.DropDownStyle = ComboBoxStyle.DropDown;
         _speedBox.Items.AddRange([
             "0.25 Mbps", "0.5 Mbps", "1 Mbps", "2 Mbps", "5 Mbps", "10 Mbps",
@@ -130,6 +141,13 @@ public sealed class MainForm : Form
         toolbar.Controls.Add(_startButton);
         toolbar.Controls.Add(_pauseButton);
         toolbar.Controls.Add(_cancelButton);
+        toolbar.Controls.Add(_pauseAfterCurrentBox);
+        toolbar.Controls.Add(new Label { Text = "   When finished:", AutoSize = true, Margin = new Padding(10, 8, 4, 0) });
+
+        _whenFinishedBox.Width = 110;
+        _whenFinishedBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _whenFinishedBox.Items.AddRange(["Do nothing", "Sleep", "Shut down"]);
+        toolbar.Controls.Add(_whenFinishedBox);
         root.Controls.Add(toolbar, 0, 1);
 
         _grid.Dock = DockStyle.Fill;
@@ -150,6 +168,24 @@ public sealed class MainForm : Form
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Speed", DataPropertyName = nameof(TransferItem.Speed), Width = 95 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "ETA", DataPropertyName = nameof(TransferItem.Eta), Width = 75 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", DataPropertyName = nameof(TransferItem.Status), Width = 165 });
+
+        var queueMenu = new ContextMenuStrip();
+        var openDestinationItem = new ToolStripMenuItem("Open Destination Folder");
+        var clearCompletedItem = new ToolStripMenuItem("Clear Completed");
+        openDestinationItem.Click += (_, _) => OpenSelectedDestinationFolder();
+        clearCompletedItem.Click += (_, _) => ClearCompleted();
+        queueMenu.Items.Add(openDestinationItem);
+        queueMenu.Items.Add(new ToolStripSeparator());
+        queueMenu.Items.Add(clearCompletedItem);
+        _grid.ContextMenuStrip = queueMenu;
+        _grid.CellMouseDown += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right || e.RowIndex < 0) return;
+            if (_grid.Rows[e.RowIndex].Selected) return;
+            _grid.ClearSelection();
+            _grid.Rows[e.RowIndex].Selected = true;
+        };
+
         root.Controls.Add(_grid, 0, 2);
 
         var statusStrip = new StatusStrip { SizingGrip = false };
@@ -160,6 +196,7 @@ public sealed class MainForm : Form
         addFilesButton.Click += (_, _) => AddFiles();
         addFolderButton.Click += (_, _) => AddFolder();
         removeButton.Click += (_, _) => RemoveSelected();
+        clearCompletedButton.Click += (_, _) => ClearCompleted();
         upButton.Click += (_, _) => MoveSelected(-1);
         downButton.Click += (_, _) => MoveSelected(1);
         browseButton.Click += (_, _) => BrowseDestination();
@@ -178,6 +215,7 @@ public sealed class MainForm : Form
             SaveSettings();
             UpdateStatus();
         };
+        _whenFinishedBox.SelectedIndexChanged += (_, _) => SaveSettings();
         _destinationBox.TextChanged += (_, _) => SaveSettings();
         _destinationBox.SelectionChangeCommitted += (_, _) =>
         {
@@ -213,6 +251,11 @@ public sealed class MainForm : Form
         RebuildDestinationItems();
         _destinationBox.Text = _settings.LastDestination;
         _speedBox.Text = string.IsNullOrWhiteSpace(_settings.SpeedLimitText) ? "2 Mbps" : _settings.SpeedLimitText;
+
+        var action = _settings.WhenFinishedAction;
+        if (!_whenFinishedBox.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), action, StringComparison.Ordinal)))
+            action = "Do nothing";
+        _whenFinishedBox.SelectedItem = action;
     }
 
     private void RebuildDestinationItems()
@@ -376,7 +419,11 @@ public sealed class MainForm : Form
 
         foreach (DataGridViewRow row in _grid.SelectedRows)
         {
-            if (row.DataBoundItem is not TransferItem item || item.Status is "Transferring" or "Paused" or "Resuming") continue;
+            if (row.DataBoundItem is not TransferItem item ||
+                item.Status is "Transferring" or "Paused" or "Resuming" ||
+                item.Status.StartsWith("Retrying", StringComparison.Ordinal))
+                continue;
+
             item.DestinationRoot = destination;
             item.Completed = false;
             item.Status = "Queued";
@@ -401,6 +448,39 @@ public sealed class MainForm : Form
         {
             if (item.Status is "Transferring" or "Paused" or "Resuming" || item.Status.StartsWith("Retrying", StringComparison.Ordinal)) continue;
             _queue.Remove(item);
+        }
+    }
+
+    private void ClearCompleted()
+    {
+        foreach (var item in _queue.Where(i => i.Completed).ToList())
+            _queue.Remove(item);
+    }
+
+    private void OpenSelectedDestinationFolder()
+    {
+        if (_grid.SelectedRows.Count == 0 || _grid.SelectedRows[0].DataBoundItem is not TransferItem item)
+            return;
+
+        if (string.IsNullOrWhiteSpace(item.DestinationRoot))
+        {
+            MessageBox.Show(this, "This item does not have a destination yet.", "Open Destination", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            var finalPath = Path.Combine(item.DestinationRoot, item.RelativePath);
+            var folder = Path.GetDirectoryName(finalPath) ?? item.DestinationRoot;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = folder,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Could not open destination", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
@@ -471,8 +551,19 @@ public sealed class MainForm : Form
             UpdateStatus();
         }
 
+        if (_engine.StoppedAfterCurrent && workItems.Any(i => i.Status != "Completed"))
+        {
+            _pauseAfterCurrentBox.Checked = false;
+            _statusLabel.Text = "Paused after current file";
+            UpdateQueueSummary(null);
+            return;
+        }
+
         if (!queueStopped && workItems.Count > 0 && workItems.All(i => i.Status == "Completed"))
+        {
             ShowCompletionNotification(workItems.Count);
+            PerformWhenFinishedAction();
+        }
     }
 
     private void TogglePause()
@@ -613,6 +704,35 @@ public sealed class MainForm : Form
         _notificationHideTimer.Start();
     }
 
+    private void PerformWhenFinishedAction()
+    {
+        if (_closing) return;
+
+        try
+        {
+            switch (_whenFinishedBox.Text)
+            {
+                case "Sleep":
+                    Application.SetSuspendState(PowerState.Suspend, force: false, disableWakeEvent: false);
+                    break;
+
+                case "Shut down":
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "shutdown.exe",
+                        Arguments = "/s /t 0",
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "When Finished action failed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     private void RememberDestination(string? destination)
     {
         destination = destination?.Trim();
@@ -636,6 +756,7 @@ public sealed class MainForm : Form
         if (_closing) return;
         _settings.LastDestination = _destinationBox.Text.Trim();
         _settings.SpeedLimitText = _speedBox.Text.Trim();
+        _settings.WhenFinishedAction = string.IsNullOrWhiteSpace(_whenFinishedBox.Text) ? "Do nothing" : _whenFinishedBox.Text;
         try { _settings.Save(); } catch { }
     }
 
@@ -656,6 +777,7 @@ public sealed class MainForm : Form
         {
             _settings.LastDestination = _destinationBox.Text.Trim();
             _settings.SpeedLimitText = _speedBox.Text.Trim();
+            _settings.WhenFinishedAction = string.IsNullOrWhiteSpace(_whenFinishedBox.Text) ? "Do nothing" : _whenFinishedBox.Text;
             _settings.Save();
             AppSettings.SaveQueue(_queue);
         }

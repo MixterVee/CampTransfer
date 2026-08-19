@@ -6,6 +6,7 @@ public sealed class AppSettings
 {
     public string LastDestination { get; set; } = "";
     public string SpeedLimitText { get; set; } = "2 Mbps";
+    public string WhenFinishedAction { get; set; } = "Do nothing";
     public List<string> RecentDestinations { get; set; } = [];
     public List<NamedDestination> NamedDestinations { get; set; } = [];
 
@@ -24,6 +25,8 @@ public sealed class AppSettings
             var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
             settings.RecentDestinations ??= [];
             settings.NamedDestinations ??= [];
+            if (string.IsNullOrWhiteSpace(settings.WhenFinishedAction))
+                settings.WhenFinishedAction = "Do nothing";
             return settings;
         }
         catch
