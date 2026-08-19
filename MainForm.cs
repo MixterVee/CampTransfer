@@ -566,9 +566,15 @@ public sealed class MainForm : Form
         var fileWord = remainingItems.Count == 1 ? "file" : "files";
         var summary = $"{remainingItems.Count} {fileWord} left • {TransferItem.FormatBytes(remainingBytes)}";
 
+        if (active?.Status.StartsWith("Retrying", StringComparison.Ordinal) == true)
+        {
+            var retryWait = string.IsNullOrWhiteSpace(active.Eta) ? "10s" : active.Eta;
+            _queueSummaryLabel.Text = $"{summary} • Waiting to retry ({retryWait})";
+            return;
+        }
+
         double estimateRate = 0;
-        if (_engine.IsRunning && !_engine.IsPaused &&
-            active?.Status.StartsWith("Retrying", StringComparison.Ordinal) != true)
+        if (_engine.IsRunning && !_engine.IsPaused)
         {
             estimateRate = active?.CurrentBytesPerSecond > 1
                 ? active.CurrentBytesPerSecond
