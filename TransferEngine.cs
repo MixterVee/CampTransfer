@@ -158,6 +158,13 @@ public sealed class TransferEngine
         var sampleWatch = Stopwatch.StartNew();
         var uiWatch = Stopwatch.StartNew();
 
+        // Cumulative pacing prevents normal Task.Delay timer overshoot from being
+        // added permanently on every chunk. If one delay runs long, later chunks
+        // automatically catch up while the long-term average stays at the limit.
+        double pacedLimit = -1;
+        long pacedBytes = 0;
+        var paceWatch = Stopwatch.StartNew();
+
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -169,16 +176,33 @@ public sealed class TransferEngine
                 sampleBytes = 0;
                 sampleWatch.Restart();
                 uiWatch.Restart();
+                pacedLimit = -1;
+                pacedBytes = 0;
+                paceWatch.Restart();
             }
 
-            // Aim for about 20 paced writes per second. This avoids large SMB/TCP bursts
-            // on slow links while keeping high limits efficient.
+            // Aim for about 20 paced writes per second. This avoids large SMB/TCP
+            // bursts on slow links while still keeping higher limits efficient.
             var limit = GetSpeedLimitBytesPerSecond();
+            if (limit <= 0)
+            {
+                pacedLimit = 0;
+                pacedBytes = 0;
+                paceWatch.Restart();
+            }
+            else if (Math.Abs(limit - pacedLimit) > 0.5)
+            {
+                // A live speed-limit change starts a fresh pacing window so the new
+                // selection takes effect immediately without carrying old timing debt.
+                pacedLimit = limit;
+                pacedBytes = 0;
+                paceWatch.Restart();
+            }
+
             var chunkSize = limit > 0
                 ? (int)Math.Clamp(limit / 20.0, 4 * 1024, buffer.Length)
                 : buffer.Length;
 
-            var chunkWatch = Stopwatch.StartNew();
             var read = await source.ReadAsync(buffer.AsMemory(0, chunkSize), token);
             if (read == 0) break;
 
@@ -188,8 +212,9 @@ public sealed class TransferEngine
 
             if (limit > 0)
             {
-                var targetSeconds = read / limit;
-                var remaining = targetSeconds - chunkWatch.Elapsed.TotalSeconds;
+                pacedBytes += read;
+                var targetSeconds = pacedBytes / limit;
+                var remaining = targetSeconds - paceWatch.Elapsed.TotalSeconds;
                 if (remaining > 0)
                     await Task.Delay(TimeSpan.FromSeconds(remaining), token);
             }
