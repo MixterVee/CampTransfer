@@ -10,6 +10,7 @@ public sealed class TransferItem : INotifyPropertyChanged
     private double _progressPercent;
     private string _speed = "";
     private string _eta = "";
+    private double _currentBytesPerSecond;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public string SourcePath { get; set; } = "";
@@ -81,6 +82,18 @@ public sealed class TransferItem : INotifyPropertyChanged
         }
     }
 
+    [JsonIgnore]
+    public double CurrentBytesPerSecond
+    {
+        get => _currentBytesPerSecond;
+        set
+        {
+            if (Math.Abs(_currentBytesPerSecond - value) < 0.5) return;
+            _currentBytesPerSecond = value;
+            OnPropertyChanged();
+        }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public void NotifyDestinationChanged() => OnPropertyChanged(nameof(DestinationDisplay));
@@ -93,6 +106,7 @@ public sealed class TransferItem : INotifyPropertyChanged
         ProgressPercent = Completed ? 100 : 0;
         Speed = "";
         Eta = "";
+        CurrentBytesPerSecond = 0;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
