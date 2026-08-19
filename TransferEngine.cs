@@ -154,8 +154,8 @@ public sealed class TransferEngine
         destination.SetLength(resumeAt);
 
         long transferred = resumeAt;
-        long sampleBytes = 0;
-        var sampleWatch = Stopwatch.StartNew();
+        long speedSampleBytes = 0;
+        var speedSampleWatch = Stopwatch.StartNew();
         var uiWatch = Stopwatch.StartNew();
 
         // Cumulative pacing prevents normal Task.Delay timer overshoot from being
@@ -173,8 +173,8 @@ public sealed class TransferEngine
             await WaitWhilePausedAsync(token);
             if (pauseWait.ElapsedMilliseconds >= 50)
             {
-                sampleBytes = 0;
-                sampleWatch.Restart();
+                speedSampleBytes = 0;
+                speedSampleWatch.Restart();
                 uiWatch.Restart();
                 pacedLimit = -1;
                 pacedBytes = 0;
@@ -192,11 +192,15 @@ public sealed class TransferEngine
             }
             else if (Math.Abs(limit - pacedLimit) > 0.5)
             {
-                // A live speed-limit change starts a fresh pacing window so the new
-                // selection takes effect immediately without carrying old timing debt.
+                // A live speed-limit change starts fresh pacing and display windows so
+                // neither old timing debt nor the old displayed speed carries forward.
                 pacedLimit = limit;
                 pacedBytes = 0;
                 paceWatch.Restart();
+                speedSampleBytes = 0;
+                speedSampleWatch.Restart();
+                item.Speed = "";
+                item.Eta = "";
             }
 
             var chunkSize = limit > 0
@@ -208,7 +212,7 @@ public sealed class TransferEngine
 
             await destination.WriteAsync(buffer.AsMemory(0, read), token);
             transferred += read;
-            sampleBytes += read;
+            speedSampleBytes += read;
 
             if (limit > 0)
             {
@@ -219,28 +223,35 @@ public sealed class TransferEngine
                     await Task.Delay(TimeSpan.FromSeconds(remaining), token);
             }
 
+            // Keep progress responsive at 4 Hz, but calculate displayed speed and ETA
+            // from a roughly one-second sample. This removes distracting short-window
+            // spikes without changing the actual transfer throttle.
             if (uiWatch.ElapsedMilliseconds >= 250)
             {
-                var seconds = Math.Max(sampleWatch.Elapsed.TotalSeconds, 0.001);
-                var actualBytesPerSecond = sampleBytes / seconds;
                 item.ProgressPercent = sourceInfo.Length == 0 ? 100 : (double)transferred / sourceInfo.Length * 100;
-                item.Speed = actualBytesPerSecond > 0 ? $"{TransferItem.FormatBytes(actualBytesPerSecond)}/s" : "";
 
-                if (actualBytesPerSecond > 1 && transferred < sourceInfo.Length)
+                if (speedSampleWatch.ElapsedMilliseconds >= 1000)
                 {
-                    var etaSeconds = (sourceInfo.Length - transferred) / actualBytesPerSecond;
-                    item.Eta = FormatEta(TimeSpan.FromSeconds(etaSeconds));
-                }
-                else
-                {
-                    item.Eta = "";
+                    var seconds = Math.Max(speedSampleWatch.Elapsed.TotalSeconds, 0.001);
+                    var actualBytesPerSecond = speedSampleBytes / seconds;
+                    item.Speed = actualBytesPerSecond > 0 ? $"{TransferItem.FormatBytes(actualBytesPerSecond)}/s" : "";
+
+                    if (actualBytesPerSecond > 1 && transferred < sourceInfo.Length)
+                    {
+                        var etaSeconds = (sourceInfo.Length - transferred) / actualBytesPerSecond;
+                        item.Eta = FormatEta(TimeSpan.FromSeconds(etaSeconds));
+                    }
+                    else
+                    {
+                        item.Eta = "";
+                    }
+
+                    speedSampleBytes = 0;
+                    speedSampleWatch.Restart();
                 }
 
                 item.Status = IsPaused ? "Paused" : "Transferring";
                 itemChanged(item);
-
-                sampleBytes = 0;
-                sampleWatch.Restart();
                 uiWatch.Restart();
             }
         }
