@@ -96,7 +96,7 @@ public sealed class TransferEngine
             {
                 if (File.Exists(metaPath))
                 {
-                    var metadata = JsonSerializer.Deserialize<TransferMetadata>(await File.ReadAllTextAsync(metaPath, token));
+                    var metadata = JsonSerializer.Deserialize<TransferMetadata>(await File.ReadAllTextAsync(metaPath, token).ConfigureAwait(false));
                     metadataMatches = metadata is not null &&
                         metadata.SourceLength == sourceInfo.Length &&
                         metadata.SourceLastWriteUtcTicks == sourceInfo.LastWriteTimeUtc.Ticks;
@@ -120,7 +120,7 @@ public sealed class TransferEngine
         }
 
         var transferMetadata = new TransferMetadata(sourceInfo.Length, sourceInfo.LastWriteTimeUtc.Ticks);
-        await File.WriteAllTextAsync(metaPath, JsonSerializer.Serialize(transferMetadata), token);
+        await File.WriteAllTextAsync(metaPath, JsonSerializer.Serialize(transferMetadata), token).ConfigureAwait(false);
 
         item.Status = resumeAt > 0 ? "Resuming" : "Transferring";
         item.ProgressPercent = sourceInfo.Length == 0 ? 100 : (double)resumeAt / sourceInfo.Length * 100;
@@ -166,10 +166,10 @@ public sealed class TransferEngine
                 : buffer.Length;
 
             var chunkWatch = Stopwatch.StartNew();
-            var read = await source.ReadAsync(buffer.AsMemory(0, chunkSize), token);
+            var read = await source.ReadAsync(buffer.AsMemory(0, chunkSize), token).ConfigureAwait(false);
             if (read == 0) break;
 
-            await destination.WriteAsync(buffer.AsMemory(0, read), token);
+            await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
             transferred += read;
             sampleBytes += read;
 
@@ -178,7 +178,7 @@ public sealed class TransferEngine
                 var targetSeconds = read / limit;
                 var remaining = targetSeconds - chunkWatch.Elapsed.TotalSeconds;
                 if (remaining > 0)
-                    await Task.Delay(TimeSpan.FromSeconds(remaining), token);
+                    await Task.Delay(TimeSpan.FromSeconds(remaining), token).ConfigureAwait(false);
             }
 
             if (uiWatch.ElapsedMilliseconds >= 250)
@@ -207,7 +207,7 @@ public sealed class TransferEngine
             }
         }
 
-        await destination.FlushAsync(token);
+        await destination.FlushAsync(token).ConfigureAwait(false);
         destination.Close();
         source.Close();
 
