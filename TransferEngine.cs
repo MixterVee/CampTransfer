@@ -192,15 +192,14 @@ public sealed class TransferEngine
             }
             else if (Math.Abs(limit - pacedLimit) > 0.5)
             {
-                // A live speed-limit change starts fresh pacing and display windows so
-                // neither old timing debt nor the old displayed speed carries forward.
+                // A live speed-limit change starts fresh pacing and measurement windows.
+                // Keep the last measured speed/ETA visible until the new one-second
+                // sample is ready, avoiding a temporary blank display.
                 pacedLimit = limit;
                 pacedBytes = 0;
                 paceWatch.Restart();
                 speedSampleBytes = 0;
                 speedSampleWatch.Restart();
-                item.Speed = "";
-                item.Eta = "";
             }
 
             var chunkSize = limit > 0
