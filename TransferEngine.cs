@@ -5,7 +5,8 @@ namespace CampTransfer;
 
 public sealed class TransferEngine
 {
-    private readonly ManualResetEventSlim _pauseGate = new(initialState: true);
+    private readonly object _pauseLock = new();
+    private TaskCompletionSource<bool>? _resumeTcs;
     private CancellationTokenSource? _currentCts;
 
     public Func<double> GetSpeedLimitBytesPerSecond { get; set; } = () => 0;
@@ -14,14 +15,26 @@ public sealed class TransferEngine
 
     public void Pause()
     {
-        IsPaused = true;
-        _pauseGate.Reset();
+        lock (_pauseLock)
+        {
+            if (IsPaused) return;
+            IsPaused = true;
+            _resumeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
     }
 
     public void Resume()
     {
-        IsPaused = false;
-        _pauseGate.Set();
+        TaskCompletionSource<bool>? resumeTcs;
+        lock (_pauseLock)
+        {
+            if (!IsPaused) return;
+            IsPaused = false;
+            resumeTcs = _resumeTcs;
+            _resumeTcs = null;
+        }
+
+        resumeTcs?.TrySetResult(true);
     }
 
     public void CancelCurrent() => _currentCts?.Cancel();
@@ -96,7 +109,7 @@ public sealed class TransferEngine
             {
                 if (File.Exists(metaPath))
                 {
-                    var metadata = JsonSerializer.Deserialize<TransferMetadata>(await File.ReadAllTextAsync(metaPath, token).ConfigureAwait(false));
+                    var metadata = JsonSerializer.Deserialize<TransferMetadata>(await File.ReadAllTextAsync(metaPath, token));
                     metadataMatches = metadata is not null &&
                         metadata.SourceLength == sourceInfo.Length &&
                         metadata.SourceLastWriteUtcTicks == sourceInfo.LastWriteTimeUtc.Ticks;
@@ -120,7 +133,7 @@ public sealed class TransferEngine
         }
 
         var transferMetadata = new TransferMetadata(sourceInfo.Length, sourceInfo.LastWriteTimeUtc.Ticks);
-        await File.WriteAllTextAsync(metaPath, JsonSerializer.Serialize(transferMetadata), token).ConfigureAwait(false);
+        await File.WriteAllTextAsync(metaPath, JsonSerializer.Serialize(transferMetadata), token);
 
         item.Status = resumeAt > 0 ? "Resuming" : "Transferring";
         item.ProgressPercent = sourceInfo.Length == 0 ? 100 : (double)resumeAt / sourceInfo.Length * 100;
@@ -150,7 +163,7 @@ public sealed class TransferEngine
             token.ThrowIfCancellationRequested();
 
             var pauseWait = Stopwatch.StartNew();
-            _pauseGate.Wait(token);
+            await WaitWhilePausedAsync(token);
             if (pauseWait.ElapsedMilliseconds >= 50)
             {
                 sampleBytes = 0;
@@ -166,10 +179,10 @@ public sealed class TransferEngine
                 : buffer.Length;
 
             var chunkWatch = Stopwatch.StartNew();
-            var read = await source.ReadAsync(buffer.AsMemory(0, chunkSize), token).ConfigureAwait(false);
+            var read = await source.ReadAsync(buffer.AsMemory(0, chunkSize), token);
             if (read == 0) break;
 
-            await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+            await destination.WriteAsync(buffer.AsMemory(0, read), token);
             transferred += read;
             sampleBytes += read;
 
@@ -178,7 +191,7 @@ public sealed class TransferEngine
                 var targetSeconds = read / limit;
                 var remaining = targetSeconds - chunkWatch.Elapsed.TotalSeconds;
                 if (remaining > 0)
-                    await Task.Delay(TimeSpan.FromSeconds(remaining), token).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromSeconds(remaining), token);
             }
 
             if (uiWatch.ElapsedMilliseconds >= 250)
@@ -207,7 +220,7 @@ public sealed class TransferEngine
             }
         }
 
-        await destination.FlushAsync(token).ConfigureAwait(false);
+        await destination.FlushAsync(token);
         destination.Close();
         source.Close();
 
@@ -221,6 +234,19 @@ public sealed class TransferEngine
         item.Eta = "";
         item.Status = "Completed";
         itemChanged(item);
+    }
+
+    private async Task WaitWhilePausedAsync(CancellationToken token)
+    {
+        Task? waitTask = null;
+        lock (_pauseLock)
+        {
+            if (IsPaused)
+                waitTask = _resumeTcs?.Task;
+        }
+
+        if (waitTask is not null)
+            await waitTask.WaitAsync(token);
     }
 
     private sealed record TransferMetadata(long SourceLength, long SourceLastWriteUtcTicks);
