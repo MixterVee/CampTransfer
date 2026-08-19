@@ -15,6 +15,9 @@ public sealed class MainForm : Form
     private readonly Button _pauseButton = new() { Text = "Pause", AutoSize = true, Enabled = false };
     private readonly Button _cancelButton = new() { Text = "Cancel Current", AutoSize = true, Enabled = false };
     private readonly ToolStripStatusLabel _statusLabel = new("Ready");
+    private readonly ToolStripStatusLabel _queueSummaryLabel = new() { Spring = true, TextAlign = ContentAlignment.MiddleRight };
+    private readonly NotifyIcon _notifyIcon = new();
+    private readonly System.Windows.Forms.Timer _notificationHideTimer = new() { Interval = 8000 };
     private CancellationTokenSource? _queueCts;
     private bool _closing;
     private double _speedLimitBytesPerSecond;
@@ -27,6 +30,14 @@ public sealed class MainForm : Form
         Size = new Size(1120, 650);
         Font = new Font("Segoe UI", 9F);
         AllowDrop = true;
+
+        _notifyIcon.Icon = SystemIcons.Application;
+        _notifyIcon.Text = "CampTransfer";
+        _notificationHideTimer.Tick += (_, _) =>
+        {
+            _notificationHideTimer.Stop();
+            _notifyIcon.Visible = false;
+        };
 
         _settings = AppSettings.Load();
         _queue = new BindingList<TransferItem>(AppSettings.LoadQueue());
@@ -59,11 +70,12 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Top,
             AutoSize = true,
-            ColumnCount = 4,
+            ColumnCount = 5,
             Margin = new Padding(0, 0, 0, 8)
         };
         destinationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         destinationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        destinationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         destinationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         destinationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
@@ -80,9 +92,11 @@ public sealed class MainForm : Form
         destinationPanel.Controls.Add(_destinationBox, 1, 0);
 
         var browseButton = new Button { Text = "Browse...", AutoSize = true };
+        var saveNamedButton = new Button { Text = "Save Name...", AutoSize = true };
         var applyDestinationButton = new Button { Text = "Set on Selected", AutoSize = true };
         destinationPanel.Controls.Add(browseButton, 2, 0);
-        destinationPanel.Controls.Add(applyDestinationButton, 3, 0);
+        destinationPanel.Controls.Add(saveNamedButton, 3, 0);
+        destinationPanel.Controls.Add(applyDestinationButton, 4, 0);
         root.Controls.Add(destinationPanel, 0, 0);
 
         var toolbar = new FlowLayoutPanel
@@ -140,6 +154,7 @@ public sealed class MainForm : Form
 
         var statusStrip = new StatusStrip { SizingGrip = false };
         statusStrip.Items.Add(_statusLabel);
+        statusStrip.Items.Add(_queueSummaryLabel);
         root.Controls.Add(statusStrip, 0, 3);
 
         addFilesButton.Click += (_, _) => AddFiles();
@@ -148,6 +163,7 @@ public sealed class MainForm : Form
         upButton.Click += (_, _) => MoveSelected(-1);
         downButton.Click += (_, _) => MoveSelected(1);
         browseButton.Click += (_, _) => BrowseDestination();
+        saveNamedButton.Click += (_, _) => SaveNamedDestination();
         applyDestinationButton.Click += (_, _) => ApplyDestinationToSelected();
     }
 
@@ -160,8 +176,18 @@ public sealed class MainForm : Form
         {
             UpdateSpeedLimitFromText();
             SaveSettings();
+            UpdateStatus();
         };
         _destinationBox.TextChanged += (_, _) => SaveSettings();
+        _destinationBox.SelectionChangeCommitted += (_, _) =>
+        {
+            if (_destinationBox.SelectedItem is NamedDestination saved)
+            {
+                _destinationBox.Text = saved.Path;
+                _destinationBox.SelectionStart = _destinationBox.Text.Length;
+                RememberDestination(saved.Path);
+            }
+        };
         FormClosing += OnFormClosing;
 
         DragEnter += (_, e) =>
@@ -184,11 +210,72 @@ public sealed class MainForm : Form
 
     private void RestoreSettings()
     {
-        foreach (var destination in _settings.RecentDestinations.Distinct(StringComparer.OrdinalIgnoreCase))
-            _destinationBox.Items.Add(destination);
-
+        RebuildDestinationItems();
         _destinationBox.Text = _settings.LastDestination;
         _speedBox.Text = string.IsNullOrWhiteSpace(_settings.SpeedLimitText) ? "2 Mbps" : _settings.SpeedLimitText;
+    }
+
+    private void RebuildDestinationItems()
+    {
+        var currentText = _destinationBox.Text;
+        _destinationBox.BeginUpdate();
+        try
+        {
+            _destinationBox.Items.Clear();
+            foreach (var saved in _settings.NamedDestinations
+                         .Where(d => !string.IsNullOrWhiteSpace(d.Name) && !string.IsNullOrWhiteSpace(d.Path))
+                         .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                _destinationBox.Items.Add(saved);
+            }
+
+            foreach (var recent in _settings.RecentDestinations
+                         .Where(d => !string.IsNullOrWhiteSpace(d))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (_settings.NamedDestinations.Any(n => n.Path.Equals(recent, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                _destinationBox.Items.Add(recent);
+            }
+        }
+        finally
+        {
+            _destinationBox.EndUpdate();
+        }
+        _destinationBox.Text = currentText;
+    }
+
+    private void SaveNamedDestination()
+    {
+        var path = _destinationBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            MessageBox.Show(this, "Enter or browse to a destination first.", "Named Destination", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var suggestedName = _settings.NamedDestinations
+            .FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase))?.Name ?? "";
+
+        if (!DestinationNameDialog.TryGetName(this, path, suggestedName, out var name))
+            return;
+
+        var existing = _settings.NamedDestinations
+            .FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
+        {
+            _settings.NamedDestinations.Add(new NamedDestination { Name = name, Path = path });
+        }
+        else
+        {
+            existing.Name = name;
+            existing.Path = path;
+        }
+
+        RememberDestination(path);
+        RebuildDestinationItems();
+        _destinationBox.Text = path;
+        SaveSettings();
     }
 
     private void AddFiles()
@@ -312,7 +399,7 @@ public sealed class MainForm : Form
 
         foreach (var item in selected)
         {
-            if (item.Status is "Transferring" or "Paused" or "Resuming") continue;
+            if (item.Status is "Transferring" or "Paused" or "Resuming" || item.Status.StartsWith("Retrying", StringComparison.Ordinal)) continue;
             _queue.Remove(item);
         }
     }
@@ -353,20 +440,28 @@ public sealed class MainForm : Form
             return;
         }
 
-        foreach (var item in _queue.Where(i => i.Status is "Cancelled" or "Error" or "Source missing" or "Destination needed"))
+        foreach (var item in _queue.Where(i =>
+                     i.Status is "Cancelled" or "Source missing" or "Destination needed" ||
+                     i.Status.StartsWith("Error:", StringComparison.Ordinal)))
+        {
             item.ResetRuntimeState();
+        }
 
         _queueCts?.Dispose();
         _queueCts = new CancellationTokenSource();
         SetRunningUi(true);
 
+        var snapshot = _queue.ToList();
+        var workItems = snapshot.Where(i => i.Status != "Completed").ToList();
+        var queueStopped = false;
+
         try
         {
-            var snapshot = _queue.ToList();
             await _engine.RunQueueAsync(snapshot, OnItemChanged, _queueCts.Token);
         }
         catch (OperationCanceledException)
         {
+            queueStopped = true;
             _statusLabel.Text = "Queue stopped";
         }
         finally
@@ -375,6 +470,9 @@ public sealed class MainForm : Form
             SaveQueue();
             UpdateStatus();
         }
+
+        if (!queueStopped && workItems.Count > 0 && workItems.All(i => i.Status == "Completed"))
+            ShowCompletionNotification(workItems.Count);
     }
 
     private void TogglePause()
@@ -397,6 +495,7 @@ public sealed class MainForm : Form
             if (active is not null) active.Status = "Paused";
             _statusLabel.Text = "Paused";
         }
+        UpdateStatus();
     }
 
     private void OnItemChanged(TransferItem item)
@@ -431,12 +530,81 @@ public sealed class MainForm : Form
     private void UpdateStatus()
     {
         var completed = _queue.Count(i => i.Status == "Completed");
-        var active = _queue.FirstOrDefault(i => i.Status is "Transferring" or "Paused" or "Resuming");
+        var active = _queue.FirstOrDefault(i =>
+            i.Status is "Transferring" or "Paused" or "Resuming" ||
+            i.Status.StartsWith("Retrying", StringComparison.Ordinal));
 
         if (active is not null)
-            _statusLabel.Text = $"{active.FileName} — {active.ProgressText} {active.Speed}".Trim();
+        {
+            _statusLabel.Text = active.Status.StartsWith("Retrying", StringComparison.Ordinal)
+                ? $"{active.FileName} — {active.Status}"
+                : $"{active.FileName} — {active.ProgressText} {active.Speed}".Trim();
+        }
         else
+        {
             _statusLabel.Text = _queue.Count == 0 ? "Ready" : $"{completed} of {_queue.Count} completed";
+        }
+
+        UpdateQueueSummary(active);
+    }
+
+    private void UpdateQueueSummary(TransferItem? active)
+    {
+        var remainingItems = _queue.Where(i => !i.Completed).ToList();
+        if (remainingItems.Count == 0)
+        {
+            _queueSummaryLabel.Text = _queue.Count == 0 ? "" : "Queue complete";
+            return;
+        }
+
+        var remainingBytes = remainingItems.Sum(i =>
+        {
+            var fractionRemaining = 1.0 - Math.Clamp(i.ProgressPercent / 100.0, 0, 1);
+            return i.SizeBytes * fractionRemaining;
+        });
+
+        var fileWord = remainingItems.Count == 1 ? "file" : "files";
+        var summary = $"{remainingItems.Count} {fileWord} left • {TransferItem.FormatBytes(remainingBytes)}";
+
+        double estimateRate = 0;
+        if (_engine.IsRunning && !_engine.IsPaused &&
+            active?.Status.StartsWith("Retrying", StringComparison.Ordinal) != true)
+        {
+            estimateRate = active?.CurrentBytesPerSecond > 1
+                ? active.CurrentBytesPerSecond
+                : _speedLimitBytesPerSecond;
+        }
+
+        if (estimateRate > 1 && remainingBytes > 0)
+        {
+            var eta = TimeSpan.FromSeconds(remainingBytes / estimateRate);
+            summary += $" • ~{FormatQueueEta(eta)}";
+        }
+
+        _queueSummaryLabel.Text = summary;
+    }
+
+    private static string FormatQueueEta(TimeSpan time)
+    {
+        if (time.TotalDays >= 1) return $"{(int)time.TotalDays}d {time.Hours}h";
+        if (time.TotalHours >= 1) return $"{(int)time.TotalHours}h {time.Minutes}m";
+        if (time.TotalMinutes >= 1) return $"{time.Minutes}m {time.Seconds}s";
+        return $"{Math.Max(0, time.Seconds)}s";
+    }
+
+    private void ShowCompletionNotification(int transferredCount)
+    {
+        if (_closing) return;
+
+        _notifyIcon.BalloonTipTitle = "CampTransfer";
+        _notifyIcon.BalloonTipText = transferredCount == 1
+            ? "Transfer completed."
+            : $"All {transferredCount} transfers completed.";
+        _notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
+        _notifyIcon.Visible = true;
+        _notifyIcon.ShowBalloonTip(5000);
+        _notificationHideTimer.Stop();
+        _notificationHideTimer.Start();
     }
 
     private void RememberDestination(string? destination)
@@ -449,8 +617,11 @@ public sealed class MainForm : Form
         if (_settings.RecentDestinations.Count > 10)
             _settings.RecentDestinations.RemoveRange(10, _settings.RecentDestinations.Count - 10);
 
-        if (!_destinationBox.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), destination, StringComparison.OrdinalIgnoreCase)))
-            _destinationBox.Items.Insert(0, destination);
+        var alreadyShown = _destinationBox.Items.Cast<object>().Any(i =>
+            i is string text && text.Equals(destination, StringComparison.OrdinalIgnoreCase) ||
+            i is NamedDestination saved && saved.Path.Equals(destination, StringComparison.OrdinalIgnoreCase));
+        if (!alreadyShown)
+            _destinationBox.Items.Add(destination);
         SaveSettings();
     }
 
@@ -472,6 +643,9 @@ public sealed class MainForm : Form
     {
         _closing = true;
         _queueCts?.Cancel();
+        _notificationHideTimer.Stop();
+        _notifyIcon.Visible = false;
+        _notifyIcon.Dispose();
         try
         {
             _settings.LastDestination = _destinationBox.Text.Trim();

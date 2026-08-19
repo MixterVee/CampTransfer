@@ -7,6 +7,7 @@ public sealed class AppSettings
     public string LastDestination { get; set; } = "";
     public string SpeedLimitText { get; set; } = "2 Mbps";
     public List<string> RecentDestinations { get; set; } = [];
+    public List<NamedDestination> NamedDestinations { get; set; } = [];
 
     private static readonly string AppDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -20,7 +21,10 @@ public sealed class AppSettings
         try
         {
             if (!File.Exists(SettingsPath)) return new AppSettings();
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+            settings.RecentDestinations ??= [];
+            settings.NamedDestinations ??= [];
+            return settings;
         }
         catch
         {
@@ -59,4 +63,12 @@ public sealed class AppSettings
     {
         WriteIndented = true
     };
+}
+
+public sealed class NamedDestination
+{
+    public string Name { get; set; } = "";
+    public string Path { get; set; } = "";
+
+    public override string ToString() => $"{Name} — {Path}";
 }
