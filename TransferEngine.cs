@@ -5,6 +5,9 @@ namespace CampTransfer;
 
 public sealed class TransferEngine
 {
+    private const int MaxRetryAttempts = 60;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
+
     private readonly object _pauseLock = new();
     private TaskCompletionSource<bool>? _resumeTcs;
     private CancellationTokenSource? _currentCts;
@@ -57,13 +60,32 @@ public sealed class TransferEngine
 
                 try
                 {
-                    await CopyOneAsync(item, itemChanged, _currentCts.Token);
+                    var retryAttempt = 0;
+                    while (true)
+                    {
+                        try
+                        {
+                            await CopyOneAsync(item, itemChanged, _currentCts.Token);
+                            break;
+                        }
+                        catch (Exception ex) when (IsRetryableTransferException(ex, item) && retryAttempt < MaxRetryAttempts)
+                        {
+                            retryAttempt++;
+                            item.Status = $"Retrying {retryAttempt}/{MaxRetryAttempts}";
+                            item.Speed = "";
+                            item.Eta = $"{(int)RetryDelay.TotalSeconds}s";
+                            item.CurrentBytesPerSecond = 0;
+                            itemChanged(item);
+                            await Task.Delay(RetryDelay, _currentCts.Token);
+                        }
+                    }
                 }
                 catch (OperationCanceledException) when (!stopQueueToken.IsCancellationRequested)
                 {
                     item.Status = "Cancelled";
                     item.Speed = "";
                     item.Eta = "";
+                    item.CurrentBytesPerSecond = 0;
                     itemChanged(item);
                 }
                 catch (Exception ex)
@@ -71,6 +93,7 @@ public sealed class TransferEngine
                     item.Status = $"Error: {ex.Message}";
                     item.Speed = "";
                     item.Eta = "";
+                    item.CurrentBytesPerSecond = 0;
                     itemChanged(item);
                 }
             }
@@ -90,6 +113,8 @@ public sealed class TransferEngine
             throw new FileNotFoundException("Source file not found", item.SourcePath);
         if (string.IsNullOrWhiteSpace(item.DestinationRoot))
             throw new InvalidOperationException("Destination is not set");
+
+        await WaitWhilePausedAsync(token);
 
         var finalPath = Path.Combine(item.DestinationRoot, item.RelativePath);
         var finalDirectory = Path.GetDirectoryName(finalPath) ?? item.DestinationRoot;
@@ -137,6 +162,7 @@ public sealed class TransferEngine
 
         item.Status = resumeAt > 0 ? "Resuming" : "Transferring";
         item.ProgressPercent = sourceInfo.Length == 0 ? 100 : (double)resumeAt / sourceInfo.Length * 100;
+        item.CurrentBytesPerSecond = 0;
         itemChanged(item);
 
         const int bufferSize = 64 * 1024;
@@ -233,6 +259,7 @@ public sealed class TransferEngine
                 {
                     var seconds = Math.Max(speedSampleWatch.Elapsed.TotalSeconds, 0.001);
                     var actualBytesPerSecond = speedSampleBytes / seconds;
+                    item.CurrentBytesPerSecond = actualBytesPerSecond;
                     item.Speed = actualBytesPerSecond > 0 ? $"{TransferItem.FormatBytes(actualBytesPerSecond)}/s" : "";
 
                     if (actualBytesPerSecond > 1 && transferred < sourceInfo.Length)
@@ -267,8 +294,17 @@ public sealed class TransferEngine
         item.ProgressPercent = 100;
         item.Speed = "";
         item.Eta = "";
+        item.CurrentBytesPerSecond = 0;
         item.Status = "Completed";
         itemChanged(item);
+    }
+
+    private static bool IsRetryableTransferException(Exception ex, TransferItem item)
+    {
+        // Most transient SMB/mapped-drive failures surface as IOException. If the
+        // source still exists, retrying is safe because CopyOneAsync resumes from the
+        // existing .camptransfer.part file and validates its metadata before appending.
+        return ex is IOException && File.Exists(item.SourcePath);
     }
 
     private async Task WaitWhilePausedAsync(CancellationToken token)
