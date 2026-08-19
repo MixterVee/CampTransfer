@@ -13,8 +13,10 @@ public sealed class TransferEngine
     private CancellationTokenSource? _currentCts;
 
     public Func<double> GetSpeedLimitBytesPerSecond { get; set; } = () => 0;
+    public Func<bool> ShouldStopAfterCurrent { get; set; } = () => false;
     public bool IsPaused { get; private set; }
     public bool IsRunning { get; private set; }
+    public bool StoppedAfterCurrent { get; private set; }
 
     public void Pause()
     {
@@ -46,6 +48,7 @@ public sealed class TransferEngine
     {
         if (IsRunning) return;
         IsRunning = true;
+        StoppedAfterCurrent = false;
         Resume();
 
         try
@@ -95,6 +98,12 @@ public sealed class TransferEngine
                     item.Eta = "";
                     item.CurrentBytesPerSecond = 0;
                     itemChanged(item);
+                }
+
+                if (item.Status == "Completed" && ShouldStopAfterCurrent())
+                {
+                    StoppedAfterCurrent = true;
+                    break;
                 }
             }
         }
