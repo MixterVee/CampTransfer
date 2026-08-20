@@ -11,6 +11,7 @@ public sealed class TransferItem : INotifyPropertyChanged
     private string _speed = "";
     private string _eta = "";
     private double _currentBytesPerSecond;
+    private string _operation = "Copy";
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public string SourcePath { get; set; } = "";
@@ -19,6 +20,18 @@ public sealed class TransferItem : INotifyPropertyChanged
     public long SizeBytes { get; set; }
     public bool Completed { get; set; }
 
+    public string Operation
+    {
+        get => _operation;
+        set
+        {
+            var normalized = string.Equals(value, "Move", StringComparison.OrdinalIgnoreCase) ? "Move" : "Copy";
+            if (_operation == normalized) return;
+            _operation = normalized;
+            OnPropertyChanged();
+        }
+    }
+
     [JsonIgnore]
     public string FileName => Path.GetFileName(SourcePath);
 
@@ -26,9 +39,15 @@ public sealed class TransferItem : INotifyPropertyChanged
     public string SizeText => FormatBytes(SizeBytes);
 
     [JsonIgnore]
-    public string DestinationDisplay => string.IsNullOrWhiteSpace(DestinationRoot)
-        ? "(not set)"
-        : Path.Combine(DestinationRoot, RelativePath);
+    public string DestinationDisplay
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(DestinationRoot)) return "(not set)";
+            var root = PathHelpers.NormalizeDestinationPath(DestinationRoot);
+            return Path.Combine(root, RelativePath);
+        }
+    }
 
     [JsonIgnore]
     public string ProgressText => $"{ProgressPercent:0.0}%";
@@ -100,6 +119,7 @@ public sealed class TransferItem : INotifyPropertyChanged
 
     public void ResetRuntimeState()
     {
+        Operation = Operation;
         Status = Completed ? "Completed" :
             !File.Exists(SourcePath) ? "Source missing" :
             string.IsNullOrWhiteSpace(DestinationRoot) ? "Destination needed" : "Queued";

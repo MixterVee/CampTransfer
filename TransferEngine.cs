@@ -56,7 +56,7 @@ public sealed class TransferEngine
             foreach (var item in items)
             {
                 stopQueueToken.ThrowIfCancellationRequested();
-                if (item.Status == "Completed") continue;
+                if (item.Completed) continue;
 
                 _currentCts?.Dispose();
                 _currentCts = CancellationTokenSource.CreateLinkedTokenSource(stopQueueToken);
@@ -100,7 +100,7 @@ public sealed class TransferEngine
                     itemChanged(item);
                 }
 
-                if (item.Status == "Completed" && ShouldStopAfterCurrent())
+                if (item.Completed && ShouldStopAfterCurrent())
                 {
                     StoppedAfterCurrent = true;
                     break;
@@ -125,8 +125,19 @@ public sealed class TransferEngine
 
         await WaitWhilePausedAsync(token);
 
-        var finalPath = Path.Combine(item.DestinationRoot, item.RelativePath);
-        var finalDirectory = Path.GetDirectoryName(finalPath) ?? item.DestinationRoot;
+        var normalizedDestination = PathHelpers.NormalizeDestinationPath(item.DestinationRoot);
+        if (!string.Equals(normalizedDestination, item.DestinationRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            item.DestinationRoot = normalizedDestination;
+            item.NotifyDestinationChanged();
+            itemChanged(item);
+        }
+
+        var finalPath = Path.Combine(normalizedDestination, item.RelativePath);
+        if (PathHelpers.PathsEqual(item.SourcePath, finalPath))
+            throw new InvalidOperationException("Source and destination are the same file");
+
+        var finalDirectory = Path.GetDirectoryName(finalPath) ?? normalizedDestination;
         Directory.CreateDirectory(finalDirectory);
 
         var tempPath = finalPath + ".camptransfer.part";
@@ -193,9 +204,6 @@ public sealed class TransferEngine
         var speedSampleWatch = Stopwatch.StartNew();
         var uiWatch = Stopwatch.StartNew();
 
-        // Cumulative pacing prevents normal Task.Delay timer overshoot from being
-        // added permanently on every chunk. If one delay runs long, later chunks
-        // automatically catch up while the long-term average stays at the limit.
         double pacedLimit = -1;
         long pacedBytes = 0;
         var paceWatch = Stopwatch.StartNew();
@@ -216,8 +224,6 @@ public sealed class TransferEngine
                 paceWatch.Restart();
             }
 
-            // Aim for about 20 paced writes per second. This avoids large SMB/TCP
-            // bursts on slow links while still keeping higher limits efficient.
             var limit = GetSpeedLimitBytesPerSecond();
             if (limit <= 0)
             {
@@ -227,9 +233,6 @@ public sealed class TransferEngine
             }
             else if (Math.Abs(limit - pacedLimit) > 0.5)
             {
-                // A live speed-limit change starts fresh pacing and measurement windows.
-                // Keep the last measured speed/ETA visible until the new one-second
-                // sample is ready, avoiding a temporary blank display.
                 pacedLimit = limit;
                 pacedBytes = 0;
                 paceWatch.Restart();
@@ -257,9 +260,6 @@ public sealed class TransferEngine
                     await Task.Delay(TimeSpan.FromSeconds(remaining), token);
             }
 
-            // Keep progress responsive at 4 Hz, but calculate displayed speed and ETA
-            // from a roughly one-second sample. This removes distracting short-window
-            // spikes without changing the actual transfer throttle.
             if (uiWatch.ElapsedMilliseconds >= 250)
             {
                 item.ProgressPercent = sourceInfo.Length == 0 ? 100 : (double)transferred / sourceInfo.Length * 100;
@@ -304,16 +304,32 @@ public sealed class TransferEngine
         item.Speed = "";
         item.Eta = "";
         item.CurrentBytesPerSecond = 0;
-        item.Status = "Completed";
+
+        if (string.Equals(item.Operation, "Move", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                File.Delete(item.SourcePath);
+                item.Status = "Completed";
+            }
+            catch (Exception ex)
+            {
+                // The destination is already complete. Never retry the whole transfer
+                // just because source cleanup failed; leave the source in place and say so.
+                item.Status = $"Completed; source retained: {ex.Message}";
+            }
+        }
+        else
+        {
+            item.Status = "Completed";
+        }
+
         itemChanged(item);
     }
 
     private static bool IsRetryableTransferException(Exception ex, TransferItem item)
     {
-        // Most transient SMB/mapped-drive failures surface as IOException. If the
-        // source still exists, retrying is safe because CopyOneAsync resumes from the
-        // existing .camptransfer.part file and validates its metadata before appending.
-        return ex is IOException && File.Exists(item.SourcePath);
+        return ex is IOException && !item.Completed && File.Exists(item.SourcePath);
     }
 
     private async Task WaitWhilePausedAsync(CancellationToken token)
