@@ -6,6 +6,9 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+
+        var form = new MainForm();
+        StartButtonAccent.Apply(form);
+        Application.Run(form);
     }
 }
