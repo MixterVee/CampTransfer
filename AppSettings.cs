@@ -6,6 +6,7 @@ public sealed class AppSettings
 {
     public string LastDestination { get; set; } = "";
     public string SpeedLimitText { get; set; } = "2 Mbps";
+    public string TransferOperation { get; set; } = "Copy";
     public string WhenFinishedAction { get; set; } = "Do nothing";
     public List<string> RecentDestinations { get; set; } = [];
     public List<NamedDestination> NamedDestinations { get; set; } = [];
@@ -25,6 +26,7 @@ public sealed class AppSettings
             var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
             settings.RecentDestinations ??= [];
             settings.NamedDestinations ??= [];
+            settings.TransferOperation = NormalizeOperation(settings.TransferOperation);
             if (string.IsNullOrWhiteSpace(settings.WhenFinishedAction))
                 settings.WhenFinishedAction = "Do nothing";
             return settings;
@@ -38,6 +40,7 @@ public sealed class AppSettings
     public void Save()
     {
         Directory.CreateDirectory(AppDirectory);
+        TransferOperation = NormalizeOperation(TransferOperation);
         File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
     }
 
@@ -47,7 +50,11 @@ public sealed class AppSettings
         {
             if (!File.Exists(QueuePath)) return [];
             var items = JsonSerializer.Deserialize<List<TransferItem>>(File.ReadAllText(QueuePath)) ?? [];
-            foreach (var item in items) item.ResetRuntimeState();
+            foreach (var item in items)
+            {
+                item.Operation = NormalizeOperation(item.Operation);
+                item.ResetRuntimeState();
+            }
             return items;
         }
         catch
@@ -61,6 +68,9 @@ public sealed class AppSettings
         Directory.CreateDirectory(AppDirectory);
         File.WriteAllText(QueuePath, JsonSerializer.Serialize(items.ToList(), JsonOptions));
     }
+
+    private static string NormalizeOperation(string? operation)
+        => string.Equals(operation, "Move", StringComparison.OrdinalIgnoreCase) ? "Move" : "Copy";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
