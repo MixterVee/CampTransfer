@@ -6,7 +6,9 @@ namespace CampTransfer;
 public sealed class TransferEngine
 {
     private const int MaxRetryAttempts = 60;
+    private const int SourceCleanupRetryAttempts = 5;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan SourceCleanupRetryDelay = TimeSpan.FromSeconds(2);
 
     private readonly object _pauseLock = new();
     private TaskCompletionSource<bool>? _resumeTcs;
@@ -63,23 +65,30 @@ public sealed class TransferEngine
 
                 try
                 {
-                    var retryAttempt = 0;
-                    while (true)
+                    if (item.SourceCleanupPending)
                     {
-                        try
+                        await CompleteMoveSourceCleanupAsync(item, itemChanged, _currentCts.Token);
+                    }
+                    else
+                    {
+                        var retryAttempt = 0;
+                        while (true)
                         {
-                            await CopyOneAsync(item, itemChanged, _currentCts.Token);
-                            break;
-                        }
-                        catch (Exception ex) when (IsRetryableTransferException(ex, item) && retryAttempt < MaxRetryAttempts)
-                        {
-                            retryAttempt++;
-                            item.Status = $"Retrying {retryAttempt}/{MaxRetryAttempts}";
-                            item.Speed = "";
-                            item.Eta = $"{(int)RetryDelay.TotalSeconds}s";
-                            item.CurrentBytesPerSecond = 0;
-                            itemChanged(item);
-                            await Task.Delay(RetryDelay, _currentCts.Token);
+                            try
+                            {
+                                await CopyOneAsync(item, itemChanged, _currentCts.Token);
+                                break;
+                            }
+                            catch (Exception ex) when (IsRetryableTransferException(ex, item) && retryAttempt < MaxRetryAttempts)
+                            {
+                                retryAttempt++;
+                                item.Status = $"Retrying {retryAttempt}/{MaxRetryAttempts}";
+                                item.Speed = "";
+                                item.Eta = $"{(int)RetryDelay.TotalSeconds}s";
+                                item.CurrentBytesPerSecond = 0;
+                                itemChanged(item);
+                                await Task.Delay(RetryDelay, _currentCts.Token);
+                            }
                         }
                     }
                 }
@@ -145,6 +154,7 @@ public sealed class TransferEngine
         var sourceInfo = new FileInfo(item.SourcePath);
         item.SizeBytes = sourceInfo.Length;
         item.Completed = false;
+        item.SourceCleanupPending = false;
 
         long resumeAt = 0;
         if (File.Exists(tempPath))
@@ -299,7 +309,6 @@ public sealed class TransferEngine
         if (File.Exists(metaPath)) File.Delete(metaPath);
         File.SetLastWriteTimeUtc(finalPath, sourceInfo.LastWriteTimeUtc);
 
-        item.Completed = true;
         item.ProgressPercent = 100;
         item.Speed = "";
         item.Eta = "";
@@ -307,29 +316,94 @@ public sealed class TransferEngine
 
         if (string.Equals(item.Operation, "Move", StringComparison.OrdinalIgnoreCase))
         {
-            try
-            {
-                File.Delete(item.SourcePath);
-                item.Status = "Completed";
-            }
-            catch (Exception ex)
-            {
-                // The destination is already complete. Never retry the whole transfer
-                // just because source cleanup failed; leave the source in place and say so.
-                item.Status = $"Completed; source retained: {ex.Message}";
-            }
+            // The destination is complete, but the Move is not complete until the
+            // source has actually been removed. Persist this state so a restart can
+            // retry source cleanup without retransferring the file.
+            item.Completed = false;
+            item.SourceCleanupPending = true;
+            item.Status = "Deleting source";
+            itemChanged(item);
+            await CompleteMoveSourceCleanupAsync(item, itemChanged, token);
         }
         else
         {
+            item.SourceCleanupPending = false;
+            item.Completed = true;
             item.Status = "Completed";
+            itemChanged(item);
+        }
+    }
+
+    private async Task<bool> CompleteMoveSourceCleanupAsync(TransferItem item, Action<TransferItem> itemChanged, CancellationToken token)
+    {
+        Exception? lastError = null;
+
+        for (var attempt = 1; attempt <= SourceCleanupRetryAttempts; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (!File.Exists(item.SourcePath))
+            {
+                MarkMoveCleanupComplete(item, itemChanged);
+                return true;
+            }
+
+            item.Status = attempt == 1
+                ? "Deleting source"
+                : $"Deleting source {attempt}/{SourceCleanupRetryAttempts}";
+            item.Speed = "";
+            item.Eta = "";
+            item.CurrentBytesPerSecond = 0;
+            itemChanged(item);
+
+            try
+            {
+                File.Delete(item.SourcePath);
+                if (!File.Exists(item.SourcePath))
+                {
+                    MarkMoveCleanupComplete(item, itemChanged);
+                    return true;
+                }
+
+                lastError = new IOException("Source file still exists after delete.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastError = ex;
+            }
+
+            if (attempt < SourceCleanupRetryAttempts)
+                await Task.Delay(SourceCleanupRetryDelay, token);
         }
 
+        item.Completed = false;
+        item.SourceCleanupPending = true;
+        item.ProgressPercent = 100;
+        item.Speed = "";
+        item.Eta = "";
+        item.CurrentBytesPerSecond = 0;
+        item.Status = lastError is null
+            ? "Source cleanup pending"
+            : $"Source cleanup pending: {lastError.Message}";
+        itemChanged(item);
+        return false;
+    }
+
+    private static void MarkMoveCleanupComplete(TransferItem item, Action<TransferItem> itemChanged)
+    {
+        item.SourceCleanupPending = false;
+        item.Completed = true;
+        item.ProgressPercent = 100;
+        item.Speed = "";
+        item.Eta = "";
+        item.CurrentBytesPerSecond = 0;
+        item.Status = "Completed";
         itemChanged(item);
     }
 
     private static bool IsRetryableTransferException(Exception ex, TransferItem item)
     {
-        return ex is IOException && !item.Completed && File.Exists(item.SourcePath);
+        return ex is IOException && !item.Completed && !item.SourceCleanupPending && File.Exists(item.SourcePath);
     }
 
     private async Task WaitWhilePausedAsync(CancellationToken token)
