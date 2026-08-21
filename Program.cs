@@ -9,6 +9,7 @@ internal static class Program
 
         var form = new MainForm();
         StartButtonAccent.Apply(form);
+        DestinationQueueSync.Attach(form);
         Application.Run(form);
     }
 }
