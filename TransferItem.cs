@@ -19,6 +19,7 @@ public sealed class TransferItem : INotifyPropertyChanged
     public string RelativePath { get; set; } = "";
     public long SizeBytes { get; set; }
     public bool Completed { get; set; }
+    public bool SourceCleanupPending { get; set; }
 
     public string Operation
     {
@@ -120,13 +121,49 @@ public sealed class TransferItem : INotifyPropertyChanged
     public void ResetRuntimeState()
     {
         Operation = Operation;
-        Status = Completed ? "Completed" :
+
+        // Recover pending cleanup across restarts. This also migrates Move items from
+        // older builds that marked the queue item complete before source deletion had
+        // actually succeeded.
+        if (SourceCleanupPending && !File.Exists(SourcePath))
+        {
+            SourceCleanupPending = false;
+            Completed = true;
+        }
+        else if (!SourceCleanupPending && Completed &&
+                 string.Equals(Operation, "Move", StringComparison.OrdinalIgnoreCase) &&
+                 File.Exists(SourcePath) && DestinationLooksComplete())
+        {
+            Completed = false;
+            SourceCleanupPending = true;
+        }
+
+        Status = SourceCleanupPending ? "Source cleanup pending" :
+            Completed ? "Completed" :
             !File.Exists(SourcePath) ? "Source missing" :
             string.IsNullOrWhiteSpace(DestinationRoot) ? "Destination needed" : "Queued";
-        ProgressPercent = Completed ? 100 : 0;
+        ProgressPercent = Completed || SourceCleanupPending ? 100 : 0;
         Speed = "";
         Eta = "";
         CurrentBytesPerSecond = 0;
+    }
+
+    private bool DestinationLooksComplete()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(DestinationRoot) || !File.Exists(SourcePath))
+                return false;
+
+            var finalPath = Path.Combine(PathHelpers.NormalizeDestinationPath(DestinationRoot), RelativePath);
+            if (!File.Exists(finalPath)) return false;
+
+            return new FileInfo(finalPath).Length == new FileInfo(SourcePath).Length;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
