@@ -13,6 +13,12 @@ internal static class PathHelpers
         path = path?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(path)) return path;
 
+        // A named destination is displayed in the editable ComboBox as
+        // "Name — Path". WinForms can briefly expose that display text through
+        // ComboBox.Text before SelectionChangeCommitted replaces it with the real
+        // path. Never allow the friendly display string to become a queue path.
+        path = ExtractNamedDestinationPath(path);
+
         try
         {
             path = Path.GetFullPath(path);
@@ -58,6 +64,28 @@ internal static class PathHelpers
         {
             return path;
         }
+    }
+
+    private static string ExtractNamedDestinationPath(string value)
+    {
+        const string separator = " — ";
+        var separatorIndex = value.LastIndexOf(separator, StringComparison.Ordinal);
+        if (separatorIndex < 0) return value;
+
+        var candidate = value[(separatorIndex + separator.Length)..].Trim();
+        if (LooksLikeRootedWindowsPath(candidate))
+            return candidate;
+
+        return value;
+    }
+
+    private static bool LooksLikeRootedWindowsPath(string value)
+    {
+        if (value.StartsWith("\\\\", StringComparison.Ordinal)) return true;
+        return value.Length >= 3 &&
+               char.IsLetter(value[0]) &&
+               value[1] == ':' &&
+               (value[2] == '\\' || value[2] == '/');
     }
 
     public static bool PathsEqual(string left, string right)
