@@ -14,6 +14,8 @@ internal sealed class RelayForm : Form
     private readonly Label _lastUpdateValue;
     private readonly CheckBox _startWithWindows;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly NotifyIcon _trayIcon;
+    private bool _exitRequested;
 
     public RelayForm()
     {
@@ -22,6 +24,8 @@ internal sealed class RelayForm : Form
         MinimumSize = new Size(520, 330);
         Size = new Size(620, 390);
         Font = new Font("Segoe UI", 10f);
+
+        _trayIcon = BuildTrayIcon();
 
         var root = new TableLayoutPanel
         {
@@ -69,7 +73,7 @@ internal sealed class RelayForm : Form
 
         var help = new Label
         {
-            Text = "Leave this app running on the home server. CampTransfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. If Windows Firewall prompts, allow it on Private networks.",
+            Text = "CampTransfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. Use the tray icon menu to exit completely.",
             AutoSize = false,
             Dock = DockStyle.Fill,
             ForeColor = SystemColors.GrayText,
@@ -103,12 +107,71 @@ internal sealed class RelayForm : Form
         _timer.Start();
         RefreshStatus();
 
+        FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
         {
             _timer.Stop();
             _timer.Dispose();
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
             _server.Dispose();
         };
+    }
+
+    private NotifyIcon BuildTrayIcon()
+    {
+        var menu = new ContextMenuStrip();
+        var openItem = new ToolStripMenuItem("Open CampTransfer Relay");
+        openItem.Click += (_, _) => RestoreFromTray();
+        menu.Items.Add(openItem);
+        menu.Items.Add(new ToolStripSeparator());
+        var exitItem = new ToolStripMenuItem("Exit CampTransfer Relay");
+        exitItem.Click += (_, _) => ExitApplication();
+        menu.Items.Add(exitItem);
+
+        var icon = new NotifyIcon
+        {
+            Text = "CampTransfer Relay",
+            Icon = SystemIcons.Application,
+            ContextMenuStrip = menu,
+            Visible = true
+        };
+        icon.DoubleClick += (_, _) => RestoreFromTray();
+        return icon;
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (_exitRequested || e.CloseReason == CloseReason.WindowsShutDown)
+            return;
+
+        e.Cancel = true;
+        HideToTray();
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        _trayIcon.Visible = true;
+    }
+
+    private void RestoreFromTray()
+    {
+        if (IsDisposed) return;
+        ShowInTaskbar = true;
+        Show();
+        if (WindowState == FormWindowState.Minimized)
+            WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+    }
+
+    private void ExitApplication()
+    {
+        _exitRequested = true;
+        _trayIcon.Visible = false;
+        Close();
     }
 
     private static void AddRow(TableLayoutPanel root, int row, string label, out Label value)
