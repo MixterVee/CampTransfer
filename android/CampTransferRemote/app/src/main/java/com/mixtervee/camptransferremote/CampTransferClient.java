@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 final class CampTransferClient {
     static final int HTTP_PORT = 45827;
     static final int DISCOVERY_PORT = 45828;
-    static final int RELAY_PORT = 45829;
+    static final int RELAY_PORT = 80;
     private static final String DISCOVERY_MESSAGE = "CAMPTRANSFER_DISCOVER";
     private static final long DIRECT_REPROBE_MS = 30_000L;
 
