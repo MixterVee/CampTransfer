@@ -27,6 +27,14 @@ public sealed class AppSettings
             settings.RecentDestinations ??= [];
             settings.NamedDestinations ??= [];
             settings.TransferOperation = NormalizeOperation(settings.TransferOperation);
+            settings.LastDestination = PathHelpers.NormalizeDestinationPath(settings.LastDestination);
+            settings.RecentDestinations = settings.RecentDestinations
+                .Select(PathHelpers.NormalizeDestinationPath)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            foreach (var destination in settings.NamedDestinations)
+                destination.Path = PathHelpers.NormalizeDestinationPath(destination.Path);
             if (string.IsNullOrWhiteSpace(settings.WhenFinishedAction))
                 settings.WhenFinishedAction = "Do nothing";
             return settings;
@@ -41,6 +49,7 @@ public sealed class AppSettings
     {
         Directory.CreateDirectory(AppDirectory);
         TransferOperation = NormalizeOperation(TransferOperation);
+        LastDestination = PathHelpers.NormalizeDestinationPath(LastDestination);
         File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
     }
 
@@ -53,6 +62,7 @@ public sealed class AppSettings
             foreach (var item in items)
             {
                 item.Operation = NormalizeOperation(item.Operation);
+                item.DestinationRoot = PathHelpers.NormalizeDestinationPath(item.DestinationRoot);
                 item.ResetRuntimeState();
             }
             return items;
@@ -66,6 +76,8 @@ public sealed class AppSettings
     public static void SaveQueue(IEnumerable<TransferItem> items)
     {
         Directory.CreateDirectory(AppDirectory);
+        foreach (var item in items)
+            item.DestinationRoot = PathHelpers.NormalizeDestinationPath(item.DestinationRoot);
         File.WriteAllText(QueuePath, JsonSerializer.Serialize(items.ToList(), JsonOptions));
     }
 
