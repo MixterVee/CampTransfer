@@ -377,7 +377,7 @@ internal sealed class RelayServer : IDisposable
                 .ToList();
             foreach (var command in commands)
                 command.LastDeliveredUtc = now;
-            ready = commands.Select(c => (object)new { c.Id, c.Action, c.Value }).ToList();
+            ready = commands.Select(c => (object)new { id = c.Id, action = c.Action, value = c.Value }).ToList();
         }
 
         if (ready.Count == 0)
