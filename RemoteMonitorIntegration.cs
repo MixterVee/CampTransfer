@@ -26,6 +26,10 @@ internal static class RemoteMonitorIntegration
         var statusStrip = FindControls<StatusStrip>(form).FirstOrDefault();
         var whenFinishedBox = FindControls<ComboBox>(form)
             .FirstOrDefault(c => c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "Shut down", StringComparison.Ordinal)));
+        var speedLimitBox = FindControls<ComboBox>(form)
+            .FirstOrDefault(c =>
+                c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "Unlimited", StringComparison.OrdinalIgnoreCase)) &&
+                c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "0.25 Mbps", StringComparison.OrdinalIgnoreCase)));
 
         var service = new RemoteMonitorService(HttpPort, DiscoveryPort);
         var remoteLabel = new ToolStripStatusLabel("Remote: Off")
@@ -44,10 +48,17 @@ internal static class RemoteMonitorIntegration
         };
         toolbar?.Controls.Add(remoteCheckBox);
 
+        string CurrentUploadLimit() => string.IsNullOrWhiteSpace(speedLimitBox?.Text)
+            ? "Unknown"
+            : speedLimitBox.Text.Trim();
+
         var refreshTimer = new System.Windows.Forms.Timer { Interval = 500 };
         refreshTimer.Tick += (_, _) =>
         {
-            service.UpdateSnapshot(BuildSnapshot(queue, whenFinishedBox?.Text ?? "Do nothing"));
+            service.UpdateSnapshot(BuildSnapshot(
+                queue,
+                whenFinishedBox?.Text ?? "Do nothing",
+                CurrentUploadLimit()));
             UpdateRemoteLabel(remoteLabel, service);
         };
 
@@ -67,7 +78,10 @@ internal static class RemoteMonitorIntegration
         if (remoteCheckBox.Checked)
             service.Start();
 
-        service.UpdateSnapshot(BuildSnapshot(queue, whenFinishedBox?.Text ?? "Do nothing"));
+        service.UpdateSnapshot(BuildSnapshot(
+            queue,
+            whenFinishedBox?.Text ?? "Do nothing",
+            CurrentUploadLimit()));
         UpdateRemoteLabel(remoteLabel, service);
         refreshTimer.Start();
 
@@ -79,7 +93,7 @@ internal static class RemoteMonitorIntegration
         };
     }
 
-    private static string BuildSnapshot(BindingList<TransferItem> queue, string whenFinished)
+    private static string BuildSnapshot(BindingList<TransferItem> queue, string whenFinished, string uploadLimit)
     {
         var items = queue.ToList();
         var active = items.FirstOrDefault(i =>
@@ -103,6 +117,7 @@ internal static class RemoteMonitorIntegration
             pcName = Environment.MachineName,
             state,
             whenFinished,
+            uploadLimit,
             updatedUtc = DateTimeOffset.UtcNow,
             filesLeft = remaining.Count,
             remainingBytes = (long)Math.Max(0, remainingBytes),
