@@ -333,7 +333,7 @@ internal sealed class RelaySettingsDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(500, 245);
+        ClientSize = new Size(540, 255);
         Font = new Font("Segoe UI", 9f);
 
         var title = new Label
@@ -350,7 +350,7 @@ internal sealed class RelaySettingsDialog : Form
             Text = "CampTransfer will send its monitor status to CampTransfer Relay over your existing network. No transferred file data is relayed.",
             AutoSize = false,
             Location = new Point(18, 46),
-            Size = new Size(460, 42)
+            Size = new Size(500, 42)
         };
         Controls.Add(help);
 
@@ -363,22 +363,43 @@ internal sealed class RelaySettingsDialog : Form
         };
         Controls.Add(_enabled);
 
-        var hostLabel = new Label { Text = "Server IP / hostname:", AutoSize = true, Location = new Point(18, 126) };
+        var hostLabel = new Label
+        {
+            Text = "Server IP / hostname:",
+            AutoSize = true,
+            Location = new Point(18, 128)
+        };
         Controls.Add(hostLabel);
 
         _host = new TextBox
         {
             Text = current.Host,
-            Location = new Point(145, 122),
-            Size = new Size(220, 25)
+            Location = new Point(170, 124),
+            Size = new Size(235, 25)
         };
         Controls.Add(_host);
 
-        var port = new Label { Text = $"Port {RemoteRelayIntegrationPort.Value}", AutoSize = true, Location = new Point(374, 126) };
+        var port = new Label
+        {
+            Text = $"Port {RemoteRelayIntegrationPort.Value}",
+            AutoSize = true,
+            Location = new Point(416, 128)
+        };
         Controls.Add(port);
 
-        var testButton = new Button { Text = "Test", Location = new Point(145, 157), Size = new Size(80, 30) };
-        _testResult = new Label { Text = "", AutoSize = false, Location = new Point(235, 163), Size = new Size(245, 42) };
+        var testButton = new Button
+        {
+            Text = "Test",
+            Location = new Point(170, 159),
+            Size = new Size(80, 30)
+        };
+        _testResult = new Label
+        {
+            Text = "",
+            AutoSize = false,
+            Location = new Point(260, 165),
+            Size = new Size(260, 42)
+        };
         testButton.Click += async (_, _) =>
         {
             testButton.Enabled = false;
@@ -389,8 +410,20 @@ internal sealed class RelaySettingsDialog : Form
         Controls.Add(testButton);
         Controls.Add(_testResult);
 
-        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(314, 207), Size = new Size(80, 30) };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(402, 207), Size = new Size(80, 30) };
+        var ok = new Button
+        {
+            Text = "Save",
+            DialogResult = DialogResult.OK,
+            Location = new Point(354, 217),
+            Size = new Size(80, 30)
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(442, 217),
+            Size = new Size(80, 30)
+        };
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
