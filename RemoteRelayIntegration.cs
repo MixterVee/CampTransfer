@@ -7,7 +7,7 @@ namespace CampTransfer;
 
 internal static class RemoteRelayIntegration
 {
-    private const int RelayPort = 45829;
+    private const int RelayPort = 80;
 
     public static void Attach(MainForm form)
     {
@@ -274,7 +274,7 @@ internal sealed class RemoteRelayPublisher : IDisposable
 
 internal static class RemoteRelayIntegrationPort
 {
-    public const int Value = 45829;
+    public const int Value = 80;
 }
 
 internal sealed class RemoteRelaySettings

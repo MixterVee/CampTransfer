@@ -9,7 +9,7 @@ namespace CampTransferRelay;
 
 internal sealed class RelayServer : IDisposable
 {
-    public const int Port = 45829;
+    public const int Port = 80;
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(12);
 
     private readonly object _snapshotLock = new();
