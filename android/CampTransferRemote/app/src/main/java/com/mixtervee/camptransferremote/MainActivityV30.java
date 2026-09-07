@@ -1,6 +1,5 @@
 package com.mixtervee.camptransferremote;
 
-import android.app.Activity;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Typeface;
@@ -190,7 +189,15 @@ public class MainActivityV30 extends MainActivityV20 {
         commandStatusText.setPadding(0, dp(8), 0, 0);
         card.addView(commandStatusText);
 
-        pairButton.setOnClickListener(v -> pairControls());
+        pairButton.setOnClickListener(v -> {
+            if (isPaired()) {
+                prefsV30.edit().remove(PREF_CONTROL_TOKEN).apply();
+                refreshPairingUi();
+                setCommandStatus("Enter the current 6-digit code shown by Pair Remote… in CampTransfer.");
+            } else {
+                pairControls();
+            }
+        });
         startButton.setOnClickListener(v -> sendCommand("start", null));
         pauseResumeButton.setOnClickListener(v -> sendCommand(lastPaused ? "resume" : "pause", null));
         cancelButton.setOnClickListener(v -> sendCommand("cancelCurrent", null));
@@ -233,6 +240,7 @@ public class MainActivityV30 extends MainActivityV20 {
                     refreshPairingUi();
                     setCommandStatus(result.message);
                     Toast.makeText(this, "Remote control paired", Toast.LENGTH_SHORT).show();
+                    pollControlState();
                 });
             } catch (Exception ex) {
                 mainHandler.post(() -> {
@@ -261,7 +269,6 @@ public class MainActivityV30 extends MainActivityV20 {
                 mainHandler.post(() -> {
                     setCommandStatus(result.message);
                     Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show();
-                    setControlsEnabled(true);
                     pollControlState();
                 });
             } catch (SecurityException ex) {
@@ -273,7 +280,7 @@ public class MainActivityV30 extends MainActivityV20 {
             } catch (Exception ex) {
                 mainHandler.post(() -> {
                     setCommandStatus(friendly(ex));
-                    setControlsEnabled(true);
+                    pollControlState();
                 });
             }
         }).start();
@@ -335,18 +342,20 @@ public class MainActivityV30 extends MainActivityV20 {
         if (index >= 0 && uploadSpinner.getSelectedItemPosition() != index)
             uploadSpinner.setSelection(index);
 
-        boolean paired = isPaired() && controlAvailable;
+        if (!controlAvailable) {
+            pairStatusText.setText("Remote control is not available on the connected CampTransfer build.");
+            setControlsEnabled(false);
+            return;
+        }
+
+        refreshPairingUi();
+        boolean paired = isPaired();
         startButton.setEnabled(paired && !hasActive && filesLeft > 0);
         pauseResumeButton.setEnabled(paired && hasActive);
         cancelButton.setEnabled(paired && hasActive);
         pauseAfterCheck.setEnabled(paired);
         uploadSpinner.setEnabled(paired);
         applyUploadButton.setEnabled(paired);
-
-        if (!controlAvailable)
-            pairStatusText.setText("Remote control is not available on the connected CampTransfer build.");
-        else
-            refreshPairingUi();
     }
 
     private void refreshPairingUi() {
@@ -358,7 +367,7 @@ public class MainActivityV30 extends MainActivityV20 {
         pairCodeEdit.setVisibility(paired ? View.GONE : View.VISIBLE);
         pairButton.setText(paired ? "Re-pair" : "Pair");
         if (paired) pairCodeEdit.setText("");
-        setControlsEnabled(paired);
+        if (!paired) setControlsEnabled(false);
     }
 
     private boolean isPaired() {
