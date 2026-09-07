@@ -5,6 +5,10 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -30,32 +34,58 @@ public class MainActivity extends Activity {
     static final String PREFS = "camptransfer_remote";
     static final String PREF_HOST = "host";
 
+    private static final int CYAN = 0xFF26C6DA;
+    private static final int CYAN_DARK = 0xFF0AA9BE;
+    private static final int GREEN = 0xFF48C78E;
+    private static final int AMBER = 0xFFFFB74D;
+    private static final int RED = 0xFFEF6C72;
+
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
     private ScheduledExecutorService poller;
 
+    private boolean darkMode;
+    private int pageColor;
+    private int surfaceColor;
+    private int surfaceAltColor;
+    private int primaryTextColor;
+    private int secondaryTextColor;
+    private int borderColor;
+
     private EditText hostEdit;
-    private TextView connectionText;
+    private TextView connectionChip;
+    private LinearLayout connectionPanel;
+    private Button discoverButton;
+
+    private TextView sectionEyebrow;
     private TextView activeFileText;
+    private TextView operationBadge;
+    private TextView statusBadge;
     private TextView progressText;
     private ProgressBar progressBar;
-    private TextView statsText;
+    private TextView speedValueText;
+    private TextView etaValueText;
     private TextView destinationText;
-    private TextView queueText;
     private TextView finishActionText;
-    private Button discoverButton;
+
+    private TextView queueSummaryText;
+    private LinearLayout queueContainer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        resolvePalette();
         buildUi();
         requestNotificationPermissionIfNeeded();
 
         String savedHost = prefs.getString(PREF_HOST, "");
-        hostEdit.setText(savedHost);
+        hostEdit.setText(savedHost == null ? "" : savedHost);
         if (savedHost == null || savedHost.trim().isEmpty()) {
+            setConnectionPanelVisible(true);
             discoverPc();
+        } else {
+            setConnectionPanelVisible(false);
         }
     }
 
@@ -71,21 +101,94 @@ public class MainActivity extends Activity {
         super.onPause();
     }
 
+    private void resolvePalette() {
+        int nightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        darkMode = nightMode == Configuration.UI_MODE_NIGHT_YES;
+
+        pageColor = darkMode ? 0xFF0E1216 : 0xFFF4F7F9;
+        surfaceColor = darkMode ? 0xFF171D22 : 0xFFFFFFFF;
+        surfaceAltColor = darkMode ? 0xFF20272D : 0xFFF0F5F7;
+        primaryTextColor = darkMode ? 0xFFF5F7F8 : 0xFF15242B;
+        secondaryTextColor = darkMode ? 0xFFAAB5BA : 0xFF60727B;
+        borderColor = darkMode ? 0xFF303A41 : 0xFFDCE5E9;
+
+        getWindow().setStatusBarColor(pageColor);
+        getWindow().setNavigationBarColor(pageColor);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            int flags = getWindow().getDecorView().getSystemUiVisibility();
+            if (!darkMode) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            else flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(flags);
+        }
+    }
+
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(pageColor);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(24));
+        root.setPadding(dp(18), dp(18), dp(18), dp(28));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT));
 
-        TextView title = text("CampTransfer Remote", 26, true);
-        root.addView(title);
+        buildHeader(root);
+        buildConnectionPanel(root);
+        buildCurrentTransferCard(root);
+        buildQueueSection(root);
 
-        connectionText = text("Not connected", 15, false);
-        connectionText.setPadding(0, dp(4), 0, dp(12));
-        root.addView(connectionText);
+        TextView footer = text("CampTransfer Remote  •  Monitor only", 12, false, secondaryTextColor);
+        footer.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams footerParams = matchWrap();
+        footerParams.topMargin = dp(24);
+        root.addView(footer, footerParams);
+
+        setContentView(scroll);
+    }
+
+    private void buildHeader(LinearLayout root) {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout titleBlock = new LinearLayout(this);
+        titleBlock.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = text("CampTransfer", 27, true, primaryTextColor);
+        titleBlock.addView(title);
+
+        TextView subtitle = text("Remote monitor", 14, false, secondaryTextColor);
+        subtitle.setPadding(0, dp(1), 0, 0);
+        titleBlock.addView(subtitle);
+
+        header.addView(titleBlock, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        connectionChip = text("●  Connecting", 13, true, primaryTextColor);
+        connectionChip.setGravity(Gravity.CENTER);
+        connectionChip.setPadding(dp(13), dp(8), dp(13), dp(8));
+        connectionChip.setBackground(roundRect(surfaceAltColor, 99, borderColor, 1));
+        connectionChip.setOnClickListener(v -> setConnectionPanelVisible(connectionPanel.getVisibility() != View.VISIBLE));
+        header.addView(connectionChip);
+
+        root.addView(header, matchWrap());
+    }
+
+    private void buildConnectionPanel(LinearLayout root) {
+        connectionPanel = new LinearLayout(this);
+        connectionPanel.setOrientation(LinearLayout.VERTICAL);
+        connectionPanel.setPadding(dp(16), dp(15), dp(16), dp(16));
+        connectionPanel.setBackground(roundRect(surfaceColor, 18, borderColor, 1));
+        connectionPanel.setElevation(dp(1));
+
+        TextView heading = text("CONNECTION", 12, true, secondaryTextColor);
+        connectionPanel.addView(heading);
+
+        TextView helper = text("Usually automatic. Use the PC address here if discovery is unavailable over Instant Guard.",
+                13, false, secondaryTextColor);
+        helper.setPadding(0, dp(5), 0, dp(10));
+        connectionPanel.addView(helper);
 
         LinearLayout hostRow = new LinearLayout(this);
         hostRow.setOrientation(LinearLayout.HORIZONTAL);
@@ -93,112 +196,180 @@ public class MainActivity extends Activity {
 
         hostEdit = new EditText(this);
         hostEdit.setSingleLine(true);
+        hostEdit.setTextColor(primaryTextColor);
+        hostEdit.setHintTextColor(secondaryTextColor);
         hostEdit.setHint("PC address or hostname");
+        hostEdit.setBackground(roundRect(surfaceAltColor, 12, borderColor, 1));
+        hostEdit.setPadding(dp(12), 0, dp(12), 0);
         hostRow.addView(hostEdit, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        Button connectButton = new Button(this);
-        connectButton.setText("Connect");
+        Button connectButton = button("Connect", true);
         connectButton.setOnClickListener(v -> connectToEnteredHost());
-        hostRow.addView(connectButton, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
-        root.addView(hostRow);
+        LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
+        connectParams.leftMargin = dp(8);
+        hostRow.addView(connectButton, connectParams);
+        connectionPanel.addView(hostRow);
 
-        discoverButton = new Button(this);
-        discoverButton.setText("Discover CampTransfer on Wi-Fi");
+        discoverButton = button("Discover on Wi-Fi", false);
         discoverButton.setOnClickListener(v -> discoverPc());
-        LinearLayout.LayoutParams discoverParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        discoverParams.topMargin = dp(8);
-        root.addView(discoverButton, discoverParams);
+        LinearLayout.LayoutParams discoverParams = matchWrap();
+        discoverParams.topMargin = dp(9);
+        connectionPanel.addView(discoverButton, discoverParams);
 
-        View divider1 = divider();
-        LinearLayout.LayoutParams divParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-        divParams.topMargin = dp(18);
-        divParams.bottomMargin = dp(18);
-        root.addView(divider1, divParams);
+        LinearLayout.LayoutParams panelParams = matchWrap();
+        panelParams.topMargin = dp(15);
+        root.addView(connectionPanel, panelParams);
+    }
 
-        TextView nowTitle = text("NOW TRANSFERRING", 13, true);
-        root.addView(nowTitle);
+    private void buildCurrentTransferCard(LinearLayout root) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(17), dp(18), dp(18));
+        card.setBackground(roundRect(surfaceColor, 20, borderColor, 1));
+        card.setElevation(dp(2));
 
-        activeFileText = text("No active transfer", 21, true);
+        sectionEyebrow = text("CURRENT TRANSFER", 12, true, CYAN_DARK);
+        card.addView(sectionEyebrow);
+
+        activeFileText = text("Waiting for CampTransfer", 21, true, primaryTextColor);
         activeFileText.setPadding(0, dp(8), 0, dp(10));
-        root.addView(activeFileText);
+        card.addView(activeFileText);
 
-        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progressBar.setMax(1000);
-        progressBar.setProgress(0);
-        root.addView(progressBar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(12)));
+        LinearLayout badges = new LinearLayout(this);
+        badges.setOrientation(LinearLayout.HORIZONTAL);
+        badges.setGravity(Gravity.CENTER_VERTICAL);
 
-        progressText = text("0.0%", 17, true);
-        progressText.setPadding(0, dp(8), 0, 0);
-        root.addView(progressText);
+        operationBadge = badge("COPY", CYAN, darkMode ? 0xFF08353B : 0xFFE7FAFC);
+        badges.addView(operationBadge);
 
-        statsText = text("Speed —    ETA —", 17, false);
-        statsText.setPadding(0, dp(6), 0, 0);
-        root.addView(statsText);
+        statusBadge = badge("CONNECTING", secondaryTextColor, surfaceAltColor);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        statusParams.leftMargin = dp(7);
+        badges.addView(statusBadge, statusParams);
+        card.addView(badges);
 
-        destinationText = text("", 14, false);
-        destinationText.setPadding(0, dp(6), 0, 0);
-        root.addView(destinationText);
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
+        progressRow.setGravity(Gravity.BOTTOM);
+        progressRow.setPadding(0, dp(16), 0, dp(8));
 
-        finishActionText = text("", 14, false);
-        finishActionText.setPadding(0, dp(4), 0, 0);
-        root.addView(finishActionText);
+        progressText = text("0.0%", 32, true, primaryTextColor);
+        progressRow.addView(progressText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        View divider2 = divider();
-        LinearLayout.LayoutParams div2Params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-        div2Params.topMargin = dp(18);
-        div2Params.bottomMargin = dp(18);
-        root.addView(divider2, div2Params);
+        finishActionText = text("When finished: —", 12, false, secondaryTextColor);
+        finishActionText.setGravity(Gravity.RIGHT | Gravity.BOTTOM);
+        progressRow.addView(finishActionText);
+        card.addView(progressRow);
 
-        TextView queueTitle = text("QUEUE", 13, true);
-        root.addView(queueTitle);
+        progressBar = makeProgressBar(dp(10));
+        card.addView(progressBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(10)));
 
-        queueText = text("No queued files", 15, false);
-        queueText.setPadding(0, dp(8), 0, 0);
-        queueText.setLineSpacing(0f, 1.15f);
-        root.addView(queueText);
+        LinearLayout stats = new LinearLayout(this);
+        stats.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams statsParams = matchWrap();
+        statsParams.topMargin = dp(14);
 
-        setContentView(scroll);
+        speedValueText = addStatTile(stats, "SPEED", "—", 1f);
+        etaValueText = addStatTile(stats, "ETA", "—", 1f);
+        card.addView(stats, statsParams);
+
+        destinationText = text("Destination will appear here", 13, false, secondaryTextColor);
+        destinationText.setPadding(0, dp(14), 0, 0);
+        destinationText.setMaxLines(2);
+        card.addView(destinationText);
+
+        LinearLayout.LayoutParams cardParams = matchWrap();
+        cardParams.topMargin = dp(18);
+        root.addView(card, cardParams);
+    }
+
+    private void buildQueueSection(LinearLayout root) {
+        LinearLayout headingRow = new LinearLayout(this);
+        headingRow.setOrientation(LinearLayout.HORIZONTAL);
+        headingRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView queueHeading = text("Queue", 20, true, primaryTextColor);
+        headingRow.addView(queueHeading, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        queueSummaryText = text("Waiting for status", 13, false, secondaryTextColor);
+        queueSummaryText.setGravity(Gravity.RIGHT);
+        headingRow.addView(queueSummaryText);
+
+        LinearLayout.LayoutParams headingParams = matchWrap();
+        headingParams.topMargin = dp(22);
+        root.addView(headingRow, headingParams);
+
+        queueContainer = new LinearLayout(this);
+        queueContainer.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams queueParams = matchWrap();
+        queueParams.topMargin = dp(10);
+        root.addView(queueContainer, queueParams);
+
+        showQueuePlaceholder("Waiting for CampTransfer…");
+    }
+
+    private TextView addStatTile(LinearLayout parent, String label, String value, float weight) {
+        LinearLayout tile = new LinearLayout(this);
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setPadding(dp(14), dp(11), dp(14), dp(12));
+        tile.setBackground(roundRect(surfaceAltColor, 14, 0, 0));
+
+        TextView labelView = text(label, 11, true, secondaryTextColor);
+        tile.addView(labelView);
+
+        TextView valueView = text(value, 20, true, primaryTextColor);
+        valueView.setPadding(0, dp(3), 0, 0);
+        tile.addView(valueView);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
+        if (parent.getChildCount() > 0) params.leftMargin = dp(9);
+        parent.addView(tile, params);
+        return valueView;
     }
 
     private void connectToEnteredHost() {
         String host = CampTransferClient.normalizeHost(hostEdit.getText().toString());
         if (host.isEmpty()) {
-            connectionText.setText("Enter the laptop IP address or hostname first.");
+            setConnectionChip("●  Enter PC address", AMBER, false);
+            setConnectionPanelVisible(true);
             return;
         }
         hostEdit.setText(host);
         prefs.edit().putString(PREF_HOST, host).apply();
-        connectionText.setText("Connecting to " + host + "…");
+        setConnectionChip("●  Connecting", AMBER, false);
         pollOnce();
     }
 
     private void discoverPc() {
         discoverButton.setEnabled(false);
-        connectionText.setText("Looking for CampTransfer on this network…");
+        discoverButton.setText("Looking…");
+        setConnectionChip("●  Discovering", AMBER, false);
         new Thread(() -> {
             try {
                 CampTransferClient.DiscoveredPc pc = CampTransferClient.discover();
                 prefs.edit().putString(PREF_HOST, pc.host).apply();
                 mainHandler.post(() -> {
                     hostEdit.setText(pc.host);
-                    connectionText.setText("Found " + pc.pcName + " — connecting…");
+                    discoverButton.setText("Discover on Wi-Fi");
                     discoverButton.setEnabled(true);
+                    setConnectionChip("●  Found " + pc.pcName, GREEN, true);
                     pollOnce();
                 });
             } catch (Exception ex) {
                 mainHandler.post(() -> {
+                    discoverButton.setText("Discover on Wi-Fi");
                     discoverButton.setEnabled(true);
                     String saved = prefs.getString(PREF_HOST, "");
                     if (saved != null && !saved.isEmpty()) {
-                        connectionText.setText("Discovery unavailable — trying saved PC " + saved);
+                        setConnectionChip("●  Trying saved PC", AMBER, false);
                         pollOnce();
                     } else {
-                        connectionText.setText("CampTransfer not found. Enter the laptop IP address if needed.");
+                        setConnectionChip("●  Not connected", RED, false);
+                        setConnectionPanelVisible(true);
                     }
                 });
             }
@@ -230,8 +401,13 @@ public class MainActivity extends Activity {
             JSONObject status = CampTransferClient.fetchStatus(host);
             mainHandler.post(() -> applyStatus(host, status));
         } catch (Exception ex) {
-            mainHandler.post(() -> connectionText.setText(
-                    "Not connected to " + host + " — " + friendlyError(ex)));
+            mainHandler.post(() -> {
+                setConnectionChip("●  Offline", RED, false);
+                sectionEyebrow.setText("CONNECTION LOST");
+                statusBadge.setText("WAITING");
+                styleBadge(statusBadge, RED, darkMode ? 0xFF3A2022 : 0xFFFFECEE);
+                queueSummaryText.setText("Trying " + host);
+            });
         }
     }
 
@@ -239,19 +415,34 @@ public class MainActivity extends Activity {
         String pcName = status.optString("pcName", host);
         String state = status.optString("state", "Ready");
         int filesLeft = status.optInt("filesLeft", 0);
-        connectionText.setText("Connected to " + pcName + " • " + state);
-
         String whenFinished = status.optString("whenFinished", "Do nothing");
+        JSONArray queue = status.optJSONArray("queue");
+
+        setConnectionChip("●  Connected to " + pcName, GREEN, true);
+        setConnectionPanelVisible(false);
         finishActionText.setText("When finished: " + whenFinished);
 
         JSONObject active = status.optJSONObject("active");
         String activeId = active == null ? "" : active.optString("id", "");
+
         if (active == null) {
-            activeFileText.setText(filesLeft == 0 ? "Queue complete / idle" : "Waiting for next file");
-            progressBar.setProgress(filesLeft == 0 ? 1000 : 0);
-            progressText.setText(filesLeft == 0 ? "100%" : "0.0%");
-            statsText.setText("Status: " + state);
-            destinationText.setText("");
+            boolean hasQueue = queue != null && queue.length() > 0;
+            boolean queueComplete = hasQueue && filesLeft == 0;
+
+            sectionEyebrow.setText(queueComplete ? "ALL DONE" : "CAMPTRANSFER STATUS");
+            sectionEyebrow.setTextColor(queueComplete ? GREEN : CYAN_DARK);
+            activeFileText.setText(queueComplete ? "Queue complete" : filesLeft > 0 ? "Waiting for next file" : "Nothing transferring");
+            operationBadge.setText("IDLE");
+            styleBadge(operationBadge, secondaryTextColor, surfaceAltColor);
+            statusBadge.setText(queueComplete ? "COMPLETED" : state.toUpperCase(Locale.getDefault()));
+            styleStatusBadge(statusBadge, state, queueComplete);
+            progressBar.setProgress(queueComplete ? 1000 : 0);
+            progressText.setText(queueComplete ? "100%" : "0.0%");
+            speedValueText.setText("—");
+            etaValueText.setText("—");
+            destinationText.setText(queueComplete
+                    ? "Everything in this queue finished successfully."
+                    : "Start or resume a transfer on the laptop to see live details here.");
         } else {
             String name = active.optString("fileName", "Transfer");
             String operation = active.optString("operation", "Copy");
@@ -261,38 +452,170 @@ public class MainActivity extends Activity {
             String itemStatus = active.optString("status", "Transferring");
             String destination = active.optString("destination", "");
 
+            sectionEyebrow.setText("CURRENT TRANSFER");
+            sectionEyebrow.setTextColor(CYAN_DARK);
             activeFileText.setText(name);
+            operationBadge.setText(operation.toUpperCase(Locale.getDefault()));
+            styleBadge(operationBadge, CYAN_DARK, darkMode ? 0xFF12353A : 0xFFE4F9FB);
+            statusBadge.setText(compactStatus(itemStatus).toUpperCase(Locale.getDefault()));
+            styleStatusBadge(statusBadge, itemStatus, false);
+
             progressBar.setProgress((int) Math.max(0, Math.min(1000, Math.round(percent * 10))));
-            progressText.setText(String.format(Locale.getDefault(), "%.1f%% • %s • %s", percent, operation, itemStatus));
-            statsText.setText("Speed " + blankAsDash(speed) + "    ETA " + blankAsDash(eta));
-            destinationText.setText(destination.isEmpty() ? "" : "To: " + destination);
+            progressText.setText(String.format(Locale.getDefault(), "%.1f%%", percent));
+            speedValueText.setText(blankAsDash(speed));
+            etaValueText.setText(blankAsDash(eta));
+            destinationText.setText(destination.isEmpty() ? "Destination unavailable" : "To  " + destination);
         }
 
-        JSONArray queue = status.optJSONArray("queue");
-        if (queue == null || queue.length() == 0) {
-            queueText.setText("No queued files");
-        } else {
-            StringBuilder lines = new StringBuilder();
-            for (int i = 0; i < queue.length(); i++) {
-                JSONObject item = queue.optJSONObject(i);
-                if (item == null) continue;
-                if (lines.length() > 0) lines.append("\n\n");
-                boolean complete = item.optBoolean("completed", false);
-                boolean isActive = !activeId.isEmpty() && activeId.equals(item.optString("id", ""));
-                String marker = complete ? "✓" : isActive ? "▶" : "•";
-                lines.append(marker).append(' ')
-                        .append(item.optString("operation", "Copy"))
-                        .append("  ")
-                        .append(item.optString("fileName", "File"))
-                        .append("\n   ")
-                        .append(String.format(Locale.getDefault(), "%.1f%%", item.optDouble("progressPercent", 0d)))
-                        .append(" • ")
-                        .append(item.optString("status", "Queued"));
-            }
-            queueText.setText(lines.toString());
-        }
+        renderQueue(queue, activeId, filesLeft);
 
         if (filesLeft > 0) startBackgroundMonitor();
+    }
+
+    private void renderQueue(JSONArray queue, String activeId, int filesLeft) {
+        queueContainer.removeAllViews();
+
+        if (queue == null || queue.length() == 0) {
+            queueSummaryText.setText("Empty");
+            showQueuePlaceholder("No files in the queue.");
+            return;
+        }
+
+        int completed = 0;
+        for (int i = 0; i < queue.length(); i++) {
+            JSONObject item = queue.optJSONObject(i);
+            if (item != null && item.optBoolean("completed", false)) completed++;
+        }
+
+        if (filesLeft == 0) {
+            queueSummaryText.setText(completed + " completed");
+        } else {
+            queueSummaryText.setText(filesLeft + (filesLeft == 1 ? " file left" : " files left"));
+        }
+
+        for (int i = 0; i < queue.length(); i++) {
+            JSONObject item = queue.optJSONObject(i);
+            if (item == null) continue;
+            boolean isActive = !activeId.isEmpty() && activeId.equals(item.optString("id", ""));
+            addQueueCard(item, isActive);
+        }
+    }
+
+    private void addQueueCard(JSONObject item, boolean isActive) {
+        boolean complete = item.optBoolean("completed", false);
+        boolean cleanupPending = item.optBoolean("sourceCleanupPending", false);
+        String operation = item.optString("operation", "Copy");
+        String status = item.optString("status", "Queued");
+        String fileName = item.optString("fileName", "File");
+        double percent = item.optDouble("progressPercent", 0d);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(13));
+        int stroke = isActive ? CYAN_DARK : borderColor;
+        card.setBackground(roundRect(complete ? surfaceAltColor : surfaceColor, 15, stroke, isActive ? 2 : 1));
+        if (isActive) card.setElevation(dp(2));
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView marker = text(complete ? "✓" : isActive ? "▶" : cleanupPending ? "!" : "○",
+                15, true, complete ? GREEN : isActive ? CYAN_DARK : cleanupPending ? AMBER : secondaryTextColor);
+        marker.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams markerParams = new LinearLayout.LayoutParams(dp(24), LinearLayout.LayoutParams.WRAP_CONTENT);
+        topRow.addView(marker, markerParams);
+
+        TextView name = text(fileName, 15, true, complete ? secondaryTextColor : primaryTextColor);
+        name.setMaxLines(2);
+        topRow.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView mode = badge(operation.toUpperCase(Locale.getDefault()),
+                isActive ? CYAN_DARK : secondaryTextColor,
+                isActive ? (darkMode ? 0xFF12353A : 0xFFE4F9FB) : surfaceAltColor);
+        topRow.addView(mode);
+        card.addView(topRow);
+
+        ProgressBar miniProgress = makeProgressBar(dp(5));
+        miniProgress.setProgress((int) Math.max(0, Math.min(1000, Math.round(percent * 10))));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(5));
+        progressParams.topMargin = dp(10);
+        card.addView(miniProgress, progressParams);
+
+        LinearLayout metaRow = new LinearLayout(this);
+        metaRow.setOrientation(LinearLayout.HORIZONTAL);
+        metaRow.setGravity(Gravity.CENTER_VERTICAL);
+        metaRow.setPadding(0, dp(7), 0, 0);
+
+        TextView pct = text(String.format(Locale.getDefault(), "%.1f%%", percent), 12, true,
+                complete ? GREEN : isActive ? CYAN_DARK : secondaryTextColor);
+        metaRow.addView(pct);
+
+        TextView statusText = text("  •  " + compactStatus(status), 12, false,
+                statusLooksProblematic(status) ? (status.startsWith("Retrying") ? AMBER : RED) : secondaryTextColor);
+        metaRow.addView(statusText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        card.addView(metaRow);
+
+        LinearLayout.LayoutParams cardParams = matchWrap();
+        if (queueContainer.getChildCount() > 0) cardParams.topMargin = dp(8);
+        queueContainer.addView(card, cardParams);
+    }
+
+    private void showQueuePlaceholder(String message) {
+        TextView empty = text(message, 14, false, secondaryTextColor);
+        empty.setGravity(Gravity.CENTER);
+        empty.setPadding(dp(16), dp(20), dp(16), dp(20));
+        empty.setBackground(roundRect(surfaceColor, 15, borderColor, 1));
+        queueContainer.addView(empty, matchWrap());
+    }
+
+    private void setConnectionChip(String value, int accentColor, boolean connected) {
+        connectionChip.setText(value);
+        connectionChip.setTextColor(connected ? (darkMode ? 0xFFDDF9E9 : 0xFF175A39) : accentColor);
+        int fill = connected
+                ? (darkMode ? 0xFF173326 : 0xFFE8F8EF)
+                : surfaceAltColor;
+        connectionChip.setBackground(roundRect(fill, 99, connected ? GREEN : borderColor, 1));
+    }
+
+    private void setConnectionPanelVisible(boolean visible) {
+        if (connectionPanel == null) return;
+        connectionPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    private void styleStatusBadge(TextView badge, String status, boolean complete) {
+        if (complete || status.equalsIgnoreCase("Completed") || status.equalsIgnoreCase("Queue complete")) {
+            styleBadge(badge, GREEN, darkMode ? 0xFF173326 : 0xFFE8F8EF);
+        } else if (status.startsWith("Retrying", StringComparison.IGNORE_CASE) || status.toLowerCase(Locale.ROOT).contains("paused")) {
+            styleBadge(badge, AMBER, darkMode ? 0xFF382D1D : 0xFFFFF3DD);
+        } else if (status.toLowerCase(Locale.ROOT).contains("error") ||
+                status.toLowerCase(Locale.ROOT).contains("cleanup pending") ||
+                status.toLowerCase(Locale.ROOT).contains("cancelled")) {
+            styleBadge(badge, RED, darkMode ? 0xFF3A2022 : 0xFFFFECEE);
+        } else {
+            styleBadge(badge, CYAN_DARK, darkMode ? 0xFF12353A : 0xFFE4F9FB);
+        }
+    }
+
+    private void styleBadge(TextView view, int textColor, int fillColor) {
+        view.setTextColor(textColor);
+        view.setBackground(roundRect(fillColor, 99, 0, 0));
+    }
+
+    private boolean statusLooksProblematic(String status) {
+        String lower = status.toLowerCase(Locale.ROOT);
+        return lower.startsWith("retrying") || lower.contains("error") ||
+                lower.contains("cleanup pending") || lower.contains("cancelled");
+    }
+
+    private String compactStatus(String status) {
+        if (status == null || status.trim().isEmpty()) return "Queued";
+        if (status.startsWith("Source cleanup pending", StringComparison.IGNORE_CASE)) return "Source cleanup pending";
+        if (status.startsWith("Retrying", StringComparison.IGNORE_CASE)) return status;
+        int colon = status.indexOf(':');
+        if (colon > 0 && colon < 24) return status.substring(0, colon);
+        return status;
     }
 
     private void startBackgroundMonitor() {
@@ -310,18 +633,58 @@ public class MainActivity extends Activity {
         }
     }
 
-    private TextView text(String value, int sp, boolean bold) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        view.setTextSize(sp);
-        if (bold) view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
+    private ProgressBar makeProgressBar(int height) {
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        bar.setProgress(0);
+        bar.setProgressTintList(ColorStateList.valueOf(CYAN));
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(darkMode ? 0xFF2B353B : 0xFFDDE8EC));
+        bar.setMinimumHeight(height);
+        return bar;
+    }
+
+    private TextView badge(String value, int textColor, int fillColor) {
+        TextView view = text(value, 11, true, textColor);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(10), dp(5), dp(10), dp(5));
+        view.setBackground(roundRect(fillColor, 99, 0, 0));
         return view;
     }
 
-    private View divider() {
-        View view = new View(this);
-        view.setBackgroundColor(0x44808080);
+    private Button button(String value, boolean primary) {
+        Button button = new Button(this);
+        button.setText(value);
+        button.setTextSize(13);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        button.setAllCaps(false);
+        button.setPadding(dp(14), 0, dp(14), 0);
+        button.setTextColor(primary ? 0xFF062D33 : primaryTextColor);
+        button.setBackground(roundRect(primary ? CYAN : surfaceAltColor, 12, primary ? CYAN : borderColor, 1));
+        button.setElevation(0);
+        return button;
+    }
+
+    private TextView text(String value, int sp, boolean bold, int color) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(sp);
+        view.setTextColor(color);
+        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
+    }
+
+    private GradientDrawable roundRect(int fillColor, int radiusDp, int strokeColor, int strokeWidthDp) {
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(fillColor);
+        background.setCornerRadius(dp(radiusDp));
+        if (strokeWidthDp > 0) background.setStroke(dp(strokeWidthDp), strokeColor);
+        return background;
+    }
+
+    private LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
     }
 
     private int dp(int value) {
@@ -332,10 +695,7 @@ public class MainActivity extends Activity {
         return value == null || value.trim().isEmpty() ? "—" : value;
     }
 
-    private static String friendlyError(Exception ex) {
-        String text = ex.getMessage();
-        if (text == null || text.trim().isEmpty()) return "waiting for CampTransfer";
-        if (text.length() > 90) text = text.substring(0, 90) + "…";
-        return text;
+    private static final class StringComparison {
+        static final int IGNORE_CASE = 1;
     }
 }
