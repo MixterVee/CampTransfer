@@ -53,6 +53,22 @@ public class MainActivityV12 extends MainActivity {
         ViewParent statsParent = speedTile.getParent();
         if (!(statsParent instanceof LinearLayout statsRow)) return;
 
+        // The live speed string is generally wider than the ETA string on a phone.
+        // Give it a modest 60/40 share of the row instead of the old 50/50 split.
+        if (statsRow.getChildCount() >= 2) {
+            View etaTile = statsRow.getChildAt(1);
+
+            if (speedTile.getLayoutParams() instanceof LinearLayout.LayoutParams speedParams) {
+                speedParams.weight = 1.2f;
+                speedTile.setLayoutParams(speedParams);
+            }
+
+            if (etaTile.getLayoutParams() instanceof LinearLayout.LayoutParams etaParams) {
+                etaParams.weight = 0.8f;
+                etaTile.setLayoutParams(etaParams);
+            }
+        }
+
         ViewParent cardParent = statsRow.getParent();
         if (!(cardParent instanceof LinearLayout card)) return;
 
