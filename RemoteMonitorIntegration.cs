@@ -30,8 +30,10 @@ internal static class RemoteMonitorIntegration
             .FirstOrDefault(c =>
                 c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "Unlimited", StringComparison.OrdinalIgnoreCase)) &&
                 c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "0.25 Mbps", StringComparison.OrdinalIgnoreCase)));
+        var pauseAfterBox = toolbar?.Controls.OfType<CheckBox>().FirstOrDefault(c => c.Text == "Pause after current");
+        var controlHub = RemoteControlIntegration.Current;
 
-        var service = new RemoteMonitorService(HttpPort, DiscoveryPort);
+        var service = new RemoteMonitorService(HttpPort, DiscoveryPort, controlHub);
         var remoteLabel = new ToolStripStatusLabel("Remote: Off")
         {
             BorderSides = ToolStripStatusLabelBorderSides.Left,
@@ -58,7 +60,9 @@ internal static class RemoteMonitorIntegration
             service.UpdateSnapshot(BuildSnapshot(
                 queue,
                 whenFinishedBox?.Text ?? "Do nothing",
-                CurrentUploadLimit()));
+                CurrentUploadLimit(),
+                pauseAfterBox?.Checked == true,
+                controlHub is not null));
             UpdateRemoteLabel(remoteLabel, service);
         };
 
@@ -81,7 +85,9 @@ internal static class RemoteMonitorIntegration
         service.UpdateSnapshot(BuildSnapshot(
             queue,
             whenFinishedBox?.Text ?? "Do nothing",
-            CurrentUploadLimit()));
+            CurrentUploadLimit(),
+            pauseAfterBox?.Checked == true,
+            controlHub is not null));
         UpdateRemoteLabel(remoteLabel, service);
         refreshTimer.Start();
 
@@ -93,7 +99,12 @@ internal static class RemoteMonitorIntegration
         };
     }
 
-    private static string BuildSnapshot(BindingList<TransferItem> queue, string whenFinished, string uploadLimit)
+    private static string BuildSnapshot(
+        BindingList<TransferItem> queue,
+        string whenFinished,
+        string uploadLimit,
+        bool pauseAfterCurrent,
+        bool remoteControlAvailable)
     {
         var items = queue.ToList();
         var active = items.FirstOrDefault(i =>
@@ -113,11 +124,13 @@ internal static class RemoteMonitorIntegration
 
         var payload = new
         {
-            apiVersion = 1,
+            apiVersion = 2,
             pcName = Environment.MachineName,
             state,
             whenFinished,
             uploadLimit,
+            pauseAfterCurrent,
+            remoteControlAvailable,
             updatedUtc = DateTimeOffset.UtcNow,
             filesLeft = remaining.Count,
             remainingBytes = (long)Math.Max(0, remainingBytes),
@@ -173,6 +186,7 @@ internal sealed class RemoteMonitorService : IDisposable
 {
     private readonly int _httpPort;
     private readonly int _discoveryPort;
+    private readonly RemoteControlHub? _controlHub;
     private readonly object _snapshotLock = new();
     private string _snapshotJson = "{}";
     private CancellationTokenSource? _cts;
@@ -185,10 +199,11 @@ internal sealed class RemoteMonitorService : IDisposable
     public string LastError { get; private set; } = "";
     public string DisplayAddress => GetPreferredLocalIPv4() ?? Environment.MachineName;
 
-    public RemoteMonitorService(int httpPort, int discoveryPort)
+    public RemoteMonitorService(int httpPort, int discoveryPort, RemoteControlHub? controlHub)
     {
         _httpPort = httpPort;
         _discoveryPort = discoveryPort;
+        _controlHub = controlHub;
     }
 
     public void UpdateSnapshot(string json)
@@ -259,42 +274,118 @@ internal sealed class RemoteMonitorService : IDisposable
         {
             try
             {
-                client.ReceiveTimeout = 3000;
-                client.SendTimeout = 3000;
+                client.ReceiveTimeout = 4000;
+                client.SendTimeout = 4000;
                 await using var stream = client.GetStream();
-                using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
-                var requestLine = await reader.ReadLineAsync(token);
-                if (string.IsNullOrWhiteSpace(requestLine)) return;
+                var request = await ReadRequestAsync(stream, token);
+                if (request is null) return;
 
-                string? header;
-                do
-                {
-                    header = await reader.ReadLineAsync(token);
-                } while (!string.IsNullOrEmpty(header));
-
-                if (requestLine.StartsWith("GET /api/status ", StringComparison.OrdinalIgnoreCase))
+                if (request.RequestLine.StartsWith("GET /api/status ", StringComparison.OrdinalIgnoreCase))
                 {
                     string json;
                     lock (_snapshotLock) json = _snapshotJson;
                     await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", json, token);
+                    return;
                 }
-                else if (requestLine.StartsWith("GET /api/ping ", StringComparison.OrdinalIgnoreCase))
+
+                if (request.RequestLine.StartsWith("GET /api/ping ", StringComparison.OrdinalIgnoreCase))
                 {
                     var json = JsonSerializer.Serialize(new
                     {
                         service = "CampTransfer",
-                        apiVersion = 1,
-                        pcName = Environment.MachineName
+                        apiVersion = 2,
+                        pcName = Environment.MachineName,
+                        remoteControlAvailable = _controlHub is not null
                     });
                     await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", json, token);
+                    return;
                 }
-                else
+
+                if (request.RequestLine.StartsWith("POST /api/pair ", StringComparison.OrdinalIgnoreCase))
                 {
-                    await WriteResponseAsync(stream, "404 Not Found", "text/plain; charset=utf-8", "Not found", token);
+                    await HandlePairAsync(stream, request, token);
+                    return;
                 }
+
+                if (request.RequestLine.StartsWith("POST /api/control ", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleControlAsync(stream, request, token);
+                    return;
+                }
+
+                await WriteResponseAsync(stream, "404 Not Found", "text/plain; charset=utf-8", "Not found", token);
+            }
+            catch (JsonException)
+            {
+                try
+                {
+                    await WriteResponseAsync(client.GetStream(), "400 Bad Request", "application/json; charset=utf-8",
+                        "{\"ok\":false,\"message\":\"Invalid JSON\"}", token);
+                }
+                catch { }
             }
             catch { }
         }
+    }
+
+    private async Task HandlePairAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        if (_controlHub is null)
+        {
+            await WriteResponseAsync(stream, "503 Service Unavailable", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Remote control is unavailable\"}", token);
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(request.Body);
+        var code = doc.RootElement.TryGetProperty("code", out var element) ? element.GetString() ?? "" : "";
+        if (!string.Equals(code.Trim(), _controlHub.PairingCode, StringComparison.Ordinal))
+        {
+            await WriteResponseAsync(stream, "403 Forbidden", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Pairing code was not accepted\"}", token);
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(new
+        {
+            ok = true,
+            token = _controlHub.Token,
+            pcName = Environment.MachineName,
+            message = "CampTransfer Remote paired successfully."
+        });
+        await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", json, token);
+    }
+
+    private async Task HandleControlAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        if (_controlHub is null)
+        {
+            await WriteResponseAsync(stream, "503 Service Unavailable", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Remote control is unavailable\"}", token);
+            return;
+        }
+
+        var bearer = GetBearerToken(request.Headers);
+        if (!_controlHub.IsAuthorized(bearer))
+        {
+            await WriteResponseAsync(stream, "401 Unauthorized", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Pair CampTransfer Remote first\"}", token);
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(request.Body);
+        var action = doc.RootElement.TryGetProperty("action", out var actionElement) ? actionElement.GetString() ?? "" : "";
+        string? value = null;
+        if (doc.RootElement.TryGetProperty("value", out var valueElement))
+        {
+            value = valueElement.ValueKind == JsonValueKind.String
+                ? valueElement.GetString()
+                : valueElement.GetRawText();
+        }
+
+        var result = await _controlHub.ExecuteAsync(action, value);
+        var json = JsonSerializer.Serialize(new { ok = result.Ok, message = result.Message });
+        await WriteResponseAsync(stream, result.Ok ? "200 OK" : "409 Conflict", "application/json; charset=utf-8", json, token);
     }
 
     private async Task DiscoveryLoopAsync(CancellationToken token)
@@ -313,7 +404,7 @@ internal sealed class RemoteMonitorService : IDisposable
                 var response = JsonSerializer.Serialize(new
                 {
                     service = "CampTransfer",
-                    apiVersion = 1,
+                    apiVersion = 2,
                     pcName = Environment.MachineName,
                     port = _httpPort
                 });
@@ -330,6 +421,79 @@ internal sealed class RemoteMonitorService : IDisposable
         }
     }
 
+    private static string? GetBearerToken(IReadOnlyDictionary<string, string> headers)
+    {
+        if (!headers.TryGetValue("Authorization", out var auth)) return null;
+        const string prefix = "Bearer ";
+        return auth.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? auth[prefix.Length..].Trim() : null;
+    }
+
+    private static async Task<HttpRequest?> ReadRequestAsync(NetworkStream stream, CancellationToken token)
+    {
+        const int maxHeaderBytes = 32768;
+        using var captured = new MemoryStream();
+        var buffer = new byte[4096];
+        var headerEnd = -1;
+
+        while (captured.Length < maxHeaderBytes && headerEnd < 0)
+        {
+            var read = await stream.ReadAsync(buffer, token);
+            if (read <= 0) return null;
+            captured.Write(buffer, 0, read);
+            headerEnd = FindHeaderEnd(captured.GetBuffer(), (int)captured.Length);
+        }
+
+        if (headerEnd < 0) throw new InvalidDataException("HTTP header too large");
+
+        var all = captured.ToArray();
+        var headerText = Encoding.ASCII.GetString(all, 0, headerEnd);
+        var lines = headerText.Split(new[] { "\r\n" }, StringSplitOptions.None);
+        if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0])) return null;
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var contentLength = 0;
+        for (var i = 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+            var name = line[..colon].Trim();
+            var value = line[(colon + 1)..].Trim();
+            headers[name] = value;
+            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                int.TryParse(value, out contentLength);
+        }
+
+        if (contentLength < 0 || contentLength > 2_000_000)
+            throw new InvalidDataException("Invalid Content-Length");
+
+        var bodyStart = headerEnd + 4;
+        var body = new byte[contentLength];
+        var already = Math.Min(contentLength, Math.Max(0, all.Length - bodyStart));
+        if (already > 0)
+            Buffer.BlockCopy(all, bodyStart, body, 0, already);
+
+        var offset = already;
+        while (offset < contentLength)
+        {
+            var read = await stream.ReadAsync(body.AsMemory(offset, contentLength - offset), token);
+            if (read <= 0) throw new EndOfStreamException("Unexpected end of request body");
+            offset += read;
+        }
+
+        return new HttpRequest(lines[0], headers, body);
+    }
+
+    private static int FindHeaderEnd(byte[] data, int length)
+    {
+        for (var i = 0; i <= length - 4; i++)
+        {
+            if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10)
+                return i;
+        }
+        return -1;
+    }
+
     private static async Task WriteResponseAsync(NetworkStream stream, string status, string contentType, string body, CancellationToken token)
     {
         var bodyBytes = Encoding.UTF8.GetBytes(body);
@@ -340,7 +504,8 @@ internal sealed class RemoteMonitorService : IDisposable
                      "Connection: close\r\n\r\n";
         var headerBytes = Encoding.ASCII.GetBytes(header);
         await stream.WriteAsync(headerBytes, token);
-        await stream.WriteAsync(bodyBytes, token);
+        if (bodyBytes.Length > 0)
+            await stream.WriteAsync(bodyBytes, token);
         await stream.FlushAsync(token);
     }
 
@@ -379,6 +544,8 @@ internal sealed class RemoteMonitorService : IDisposable
     }
 
     public void Dispose() => Stop();
+
+    private sealed record HttpRequest(string RequestLine, IReadOnlyDictionary<string, string> Headers, byte[] Body);
 }
 
 internal static class RemoteMonitorPreferences

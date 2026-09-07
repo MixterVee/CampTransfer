@@ -3,7 +3,9 @@ package com.mixtervee.camptransferremote;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
@@ -103,6 +105,93 @@ final class CampTransferClient {
         throw new IllegalStateException(message, cause);
     }
 
+    static synchronized PairResult pairBest(String directHost, String relayHost, String code) throws Exception {
+        String direct = normalizeHost(directHost);
+        String relay = normalizeHost(relayHost);
+        Exception firstError = null;
+
+        if (preferRelay && !relay.isEmpty()) {
+            try {
+                PairResult result = pairAt(relay, RELAY_PORT, code, true);
+                preferRelay = true;
+                return result;
+            } catch (Exception ex) {
+                firstError = ex;
+            }
+            if (!direct.isEmpty()) {
+                PairResult result = pairAt(direct, HTTP_PORT, code, false);
+                preferRelay = false;
+                return result;
+            }
+        } else {
+            if (!direct.isEmpty()) {
+                try {
+                    PairResult result = pairAt(direct, HTTP_PORT, code, false);
+                    preferRelay = false;
+                    return result;
+                } catch (Exception ex) {
+                    firstError = ex;
+                }
+            }
+            if (!relay.isEmpty()) {
+                PairResult result = pairAt(relay, RELAY_PORT, code, true);
+                preferRelay = true;
+                return result;
+            }
+        }
+
+        if (firstError != null) throw firstError;
+        throw new IllegalArgumentException("No CampTransfer or relay address is configured");
+    }
+
+    static synchronized ControlResult sendBestControl(
+            String directHost,
+            String relayHost,
+            String token,
+            String action,
+            Object value) throws Exception {
+        String direct = normalizeHost(directHost);
+        String relay = normalizeHost(relayHost);
+        Exception firstError = null;
+
+        if (preferRelay && !relay.isEmpty()) {
+            try {
+                ControlResult result = sendControlAt(relay, RELAY_PORT, token, action, value, true);
+                preferRelay = true;
+                return result;
+            } catch (SecurityException ex) {
+                throw ex;
+            } catch (Exception ex) {
+                firstError = ex;
+            }
+            if (!direct.isEmpty()) {
+                ControlResult result = sendControlAt(direct, HTTP_PORT, token, action, value, false);
+                preferRelay = false;
+                return result;
+            }
+        } else {
+            if (!direct.isEmpty()) {
+                try {
+                    ControlResult result = sendControlAt(direct, HTTP_PORT, token, action, value, false);
+                    preferRelay = false;
+                    return result;
+                } catch (SecurityException ex) {
+                    throw ex;
+                } catch (Exception ex) {
+                    firstError = ex;
+                }
+            }
+            if (!relay.isEmpty()) {
+                ControlResult result = sendControlAt(relay, RELAY_PORT, token, action, value, true);
+                preferRelay = true;
+                return result;
+            }
+        }
+
+        if (firstError != null) throw firstError;
+        throw new IllegalArgumentException("No CampTransfer or relay address is configured");
+    }
+
     private static JSONObject fetchStatusAt(String host, int port, int timeoutMs) throws Exception {
         String normalized = normalizeHost(host);
         if (normalized.isEmpty()) throw new IllegalArgumentException("Server address is empty");
@@ -118,17 +207,88 @@ final class CampTransferClient {
         try {
             int code = connection.getResponseCode();
             if (code != 200) throw new IllegalStateException("Server returned HTTP " + code);
-
-            StringBuilder text = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) text.append(line);
-            }
-            return new JSONObject(text.toString());
+            return new JSONObject(readBody(connection, false));
         } finally {
             connection.disconnect();
         }
+    }
+
+    private static PairResult pairAt(String host, int port, String code, boolean viaRelay) throws Exception {
+        JSONObject payload = new JSONObject();
+        payload.put("code", code == null ? "" : code.trim());
+        JSONObject response = postJson(host, port, "/api/pair", payload, null, 5000);
+        String token = response.optString("token", "");
+        if (token.isEmpty()) throw new IllegalStateException(response.optString("message", "Pairing failed"));
+        return new PairResult(token, response.optString("message", "Paired"), viaRelay);
+    }
+
+    private static ControlResult sendControlAt(
+            String host,
+            int port,
+            String token,
+            String action,
+            Object value,
+            boolean viaRelay) throws Exception {
+        JSONObject payload = new JSONObject();
+        payload.put("action", action);
+        if (value != null) payload.put("value", value);
+        JSONObject response = postJson(host, port, "/api/control", payload, token, viaRelay ? 8000 : 4500);
+        boolean ok = response.optBoolean("ok", false);
+        String message = response.optString("message", ok ? "Command completed" : "Command failed");
+        return new ControlResult(ok, message, viaRelay, response.optBoolean("acknowledged", !viaRelay));
+    }
+
+    private static JSONObject postJson(
+            String host,
+            int port,
+            String path,
+            JSONObject payload,
+            String bearerToken,
+            int timeoutMs) throws Exception {
+        String normalized = normalizeHost(host);
+        if (normalized.isEmpty()) throw new IllegalArgumentException("Server address is empty");
+
+        URL url = new URL("http://" + normalized + ":" + port + path);
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("POST");
+        connection.setConnectTimeout(timeoutMs);
+        connection.setReadTimeout(timeoutMs);
+        connection.setUseCaches(false);
+        connection.setDoOutput(true);
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        connection.setRequestProperty("Connection", "close");
+        if (bearerToken != null && !bearerToken.isEmpty())
+            connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
+
+        byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+        connection.setFixedLengthStreamingMode(body.length);
+        try (OutputStream output = connection.getOutputStream()) {
+            output.write(body);
+        }
+
+        try {
+            int status = connection.getResponseCode();
+            String text = readBody(connection, status >= 400);
+            JSONObject response = text.isEmpty() ? new JSONObject() : new JSONObject(text);
+            if (status == 401 || status == 403)
+                throw new SecurityException(response.optString("message", "Pairing is required"));
+            if (status < 200 || status >= 300)
+                throw new IllegalStateException(response.optString("message", "Server returned HTTP " + status));
+            return response;
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private static String readBody(HttpURLConnection connection, boolean error) throws Exception {
+        InputStream stream = error ? connection.getErrorStream() : connection.getInputStream();
+        if (stream == null) return "";
+        StringBuilder text = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) text.append(line);
+        }
+        return text.toString();
     }
 
     static DiscoveredPc discover() throws Exception {
@@ -181,6 +341,32 @@ final class CampTransferClient {
             this.status = status;
             this.viaRelay = viaRelay;
             this.sourceHost = sourceHost;
+        }
+    }
+
+    static final class PairResult {
+        final String token;
+        final String message;
+        final boolean viaRelay;
+
+        PairResult(String token, String message, boolean viaRelay) {
+            this.token = token;
+            this.message = message;
+            this.viaRelay = viaRelay;
+        }
+    }
+
+    static final class ControlResult {
+        final boolean ok;
+        final String message;
+        final boolean viaRelay;
+        final boolean acknowledged;
+
+        ControlResult(boolean ok, String message, boolean viaRelay, boolean acknowledged) {
+            this.ok = ok;
+            this.message = message;
+            this.viaRelay = viaRelay;
+            this.acknowledged = acknowledged;
         }
     }
 

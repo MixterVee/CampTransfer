@@ -1,5 +1,5 @@
 using System.ComponentModel;
-using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 
@@ -27,9 +27,11 @@ internal static class RemoteRelayIntegration
             .FirstOrDefault(c =>
                 c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "Unlimited", StringComparison.OrdinalIgnoreCase)) &&
                 c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "0.25 Mbps", StringComparison.OrdinalIgnoreCase)));
+        var pauseAfterBox = toolbar?.Controls.OfType<CheckBox>().FirstOrDefault(c => c.Text == "Pause after current");
+        var controlHub = RemoteControlIntegration.Current;
 
         var settings = RemoteRelayPreferences.Load();
-        var publisher = new RemoteRelayPublisher(settings);
+        var publisher = new RemoteRelayPublisher(settings, controlHub);
 
         var relayButton = new Button
         {
@@ -49,6 +51,13 @@ internal static class RemoteRelayIntegration
         string CurrentUploadLimit() => string.IsNullOrWhiteSpace(speedLimitBox?.Text)
             ? "Unknown"
             : speedLimitBox.Text.Trim();
+
+        string Snapshot() => BuildSnapshot(
+            queue,
+            whenFinishedBox?.Text ?? "Do nothing",
+            CurrentUploadLimit(),
+            pauseAfterBox?.Checked == true,
+            controlHub is not null);
 
         void UpdateRelayLabel()
         {
@@ -89,8 +98,7 @@ internal static class RemoteRelayIntegration
 
             if (updated.Enabled && !string.IsNullOrWhiteSpace(updated.Host))
             {
-                var snapshot = BuildSnapshot(queue, whenFinishedBox?.Text ?? "Do nothing", CurrentUploadLimit());
-                await publisher.PublishAsync(snapshot);
+                await publisher.SyncAsync(Snapshot());
                 UpdateRelayLabel();
             }
         };
@@ -101,10 +109,7 @@ internal static class RemoteRelayIntegration
             if (publisher.IsBusy) return;
             var current = publisher.Settings;
             if (current.Enabled && !string.IsNullOrWhiteSpace(current.Host))
-            {
-                var snapshot = BuildSnapshot(queue, whenFinishedBox?.Text ?? "Do nothing", CurrentUploadLimit());
-                await publisher.PublishAsync(snapshot);
-            }
+                await publisher.SyncAsync(Snapshot());
             UpdateRelayLabel();
         };
         timer.Start();
@@ -118,7 +123,12 @@ internal static class RemoteRelayIntegration
         };
     }
 
-    private static string BuildSnapshot(BindingList<TransferItem> queue, string whenFinished, string uploadLimit)
+    private static string BuildSnapshot(
+        BindingList<TransferItem> queue,
+        string whenFinished,
+        string uploadLimit,
+        bool pauseAfterCurrent,
+        bool remoteControlAvailable)
     {
         var items = queue.ToList();
         var active = items.FirstOrDefault(i =>
@@ -137,11 +147,13 @@ internal static class RemoteRelayIntegration
         var state = active?.Status ?? (items.Count == 0 ? "Ready" : remaining.Count == 0 ? "Queue complete" : "Queued");
         var payload = new
         {
-            apiVersion = 1,
+            apiVersion = 2,
             pcName = Environment.MachineName,
             state,
             whenFinished,
             uploadLimit,
+            pauseAfterCurrent,
+            remoteControlAvailable,
             updatedUtc = DateTimeOffset.UtcNow,
             filesLeft = remaining.Count,
             remainingBytes = (long)Math.Max(0, remainingBytes),
@@ -178,7 +190,8 @@ internal static class RemoteRelayIntegration
 
 internal sealed class RemoteRelayPublisher : IDisposable
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(3) };
+    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(4) };
+    private readonly RemoteControlHub? _controlHub;
     private bool _busy;
 
     public RemoteRelaySettings Settings { get; private set; }
@@ -186,9 +199,10 @@ internal sealed class RemoteRelayPublisher : IDisposable
     public DateTimeOffset? LastSuccessUtc { get; private set; }
     public string LastError { get; private set; } = "";
 
-    public RemoteRelayPublisher(RemoteRelaySettings settings)
+    public RemoteRelayPublisher(RemoteRelaySettings settings, RemoteControlHub? controlHub)
     {
         Settings = settings;
+        _controlHub = controlHub;
     }
 
     public void Configure(RemoteRelaySettings settings)
@@ -198,20 +212,32 @@ internal sealed class RemoteRelayPublisher : IDisposable
         LastError = "";
     }
 
-    public async Task PublishAsync(string snapshotJson)
+    public async Task SyncAsync(string snapshotJson)
     {
         if (_busy || !Settings.Enabled || string.IsNullOrWhiteSpace(Settings.Host)) return;
         _busy = true;
         try
         {
             var host = NormalizeHost(Settings.Host);
-            using var content = new StringContent(snapshotJson, Encoding.UTF8, "application/json");
-            using var response = await _httpClient.PostAsync($"http://{host}:{RemoteRelayIntegrationPort.Value}/api/status", content);
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"http://{host}:{RemoteRelayIntegrationPort.Value}/api/status");
+            request.Content = new StringContent(snapshotJson, Encoding.UTF8, "application/json");
+            if (_controlHub is not null)
+            {
+                request.Headers.TryAddWithoutValidation("X-CampTransfer-Control-Token", _controlHub.Token);
+                request.Headers.TryAddWithoutValidation("X-CampTransfer-Pairing-Code", _controlHub.PairingCode);
+                request.Headers.TryAddWithoutValidation("X-CampTransfer-PC", Environment.MachineName);
+            }
+
+            using var response = await _httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
                 throw new HttpRequestException($"HTTP {(int)response.StatusCode}");
 
             LastSuccessUtc = DateTimeOffset.UtcNow;
             LastError = "";
+
+            if (_controlHub is not null)
+                await PollCommandsAsync(host);
         }
         catch (Exception ex)
         {
@@ -221,6 +247,51 @@ internal sealed class RemoteRelayPublisher : IDisposable
         {
             _busy = false;
         }
+    }
+
+    private async Task PollCommandsAsync(string host)
+    {
+        if (_controlHub is null) return;
+
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"http://{host}:{RemoteRelayIntegrationPort.Value}/api/commands");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _controlHub.Token);
+        using var response = await _httpClient.SendAsync(request);
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent) return;
+        if (!response.IsSuccessStatusCode) return;
+
+        var text = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(text);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return;
+
+        foreach (var command in doc.RootElement.EnumerateArray())
+        {
+            var id = command.TryGetProperty("id", out var idElement) ? idElement.GetString() ?? "" : "";
+            var action = command.TryGetProperty("action", out var actionElement) ? actionElement.GetString() ?? "" : "";
+            string? value = null;
+            if (command.TryGetProperty("value", out var valueElement))
+            {
+                value = valueElement.ValueKind == JsonValueKind.String
+                    ? valueElement.GetString()
+                    : valueElement.GetRawText();
+            }
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(action)) continue;
+
+            var result = await _controlHub.ExecuteAsync(action, value);
+            await SendCommandResultAsync(host, id, result);
+        }
+    }
+
+    private async Task SendCommandResultAsync(string host, string id, RemoteControlResult result)
+    {
+        if (_controlHub is null) return;
+
+        var json = JsonSerializer.Serialize(new { id, ok = result.Ok, message = result.Message });
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"http://{host}:{RemoteRelayIntegrationPort.Value}/api/command-result");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _controlHub.Token);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var response = await _httpClient.SendAsync(request);
     }
 
     public static async Task<string> TestAsync(string host)
@@ -333,72 +404,96 @@ internal sealed class RelaySettingsDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(540, 255);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        Padding = new Padding(16);
         Font = new Font("Segoe UI", 9f);
 
-        var title = new Label
+        var root = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 6,
+            Dock = DockStyle.Fill,
+            MaximumSize = new Size(580, 0)
+        };
+
+        root.Controls.Add(new Label
         {
             Text = "Home relay server",
             Font = new Font("Segoe UI", 12f, FontStyle.Bold),
             AutoSize = true,
-            Location = new Point(18, 16)
-        };
-        Controls.Add(title);
+            Margin = new Padding(0, 0, 0, 8)
+        });
 
-        var help = new Label
+        root.Controls.Add(new Label
         {
-            Text = "CampTransfer will send its monitor status to CampTransfer Relay over your existing network. No transferred file data is relayed.",
-            AutoSize = false,
-            Location = new Point(18, 46),
-            Size = new Size(500, 42)
-        };
-        Controls.Add(help);
+            Text = "CampTransfer sends monitor status and authenticated remote commands through CampTransfer Relay. No transferred file data is relayed.",
+            AutoSize = true,
+            MaximumSize = new Size(540, 0),
+            Margin = new Padding(0, 0, 0, 10)
+        });
 
         _enabled = new CheckBox
         {
             Text = "Enable home relay",
             Checked = current.Enabled,
             AutoSize = true,
-            Location = new Point(18, 92)
+            Margin = new Padding(0, 0, 0, 10)
         };
-        Controls.Add(_enabled);
+        root.Controls.Add(_enabled);
 
-        var hostLabel = new Label
+        var addressRow = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 3,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        addressRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        addressRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        addressRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        addressRow.Controls.Add(new Label
         {
             Text = "Server IP / hostname:",
             AutoSize = true,
-            Location = new Point(18, 128)
-        };
-        Controls.Add(hostLabel);
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 6, 10, 0)
+        }, 0, 0);
 
         _host = new TextBox
         {
             Text = current.Host,
-            Location = new Point(170, 124),
-            Size = new Size(235, 25)
+            Dock = DockStyle.Fill,
+            MinimumSize = new Size(240, 0),
+            Margin = new Padding(0, 2, 10, 0)
         };
-        Controls.Add(_host);
-
-        var port = new Label
+        addressRow.Controls.Add(_host, 1, 0);
+        addressRow.Controls.Add(new Label
         {
             Text = $"Port {RemoteRelayIntegrationPort.Value}",
             AutoSize = true,
-            Location = new Point(416, 128)
-        };
-        Controls.Add(port);
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 6, 0, 0)
+        }, 2, 0);
+        root.Controls.Add(addressRow);
 
-        var testButton = new Button
+        var testRow = new FlowLayoutPanel
         {
-            Text = "Test",
-            Location = new Point(170, 159),
-            Size = new Size(80, 30)
+            AutoSize = true,
+            WrapContents = false,
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 0, 12)
         };
+        var testButton = new Button { Text = "Test", AutoSize = true };
         _testResult = new Label
         {
             Text = "",
-            AutoSize = false,
-            Location = new Point(260, 165),
-            Size = new Size(260, 42)
+            AutoSize = true,
+            MaximumSize = new Size(390, 0),
+            Margin = new Padding(10, 7, 0, 0)
         };
         testButton.Click += async (_, _) =>
         {
@@ -407,25 +502,24 @@ internal sealed class RelaySettingsDialog : Form
             _testResult.Text = await RemoteRelayPublisher.TestAsync(_host.Text);
             testButton.Enabled = true;
         };
-        Controls.Add(testButton);
-        Controls.Add(_testResult);
+        testRow.Controls.Add(testButton);
+        testRow.Controls.Add(_testResult);
+        root.Controls.Add(testRow);
 
-        var ok = new Button
+        var buttons = new FlowLayoutPanel
         {
-            Text = "Save",
-            DialogResult = DialogResult.OK,
-            Location = new Point(354, 217),
-            Size = new Size(80, 30)
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Dock = DockStyle.Fill
         };
-        var cancel = new Button
-        {
-            Text = "Cancel",
-            DialogResult = DialogResult.Cancel,
-            Location = new Point(442, 217),
-            Size = new Size(80, 30)
-        };
-        Controls.Add(ok);
-        Controls.Add(cancel);
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, AutoSize = true };
+        buttons.Controls.Add(cancel);
+        buttons.Controls.Add(ok);
+        root.Controls.Add(buttons);
+
+        Controls.Add(root);
         AcceptButton = ok;
         CancelButton = cancel;
 
