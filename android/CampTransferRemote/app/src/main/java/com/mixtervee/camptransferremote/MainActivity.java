@@ -43,6 +43,7 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
     private ScheduledExecutorService poller;
+    private boolean connectionPanelPinnedOpen;
 
     private boolean darkMode;
     private int pageColor;
@@ -82,6 +83,7 @@ public class MainActivity extends Activity {
         String savedHost = prefs.getString(PREF_HOST, "");
         hostEdit.setText(savedHost == null ? "" : savedHost);
         if (savedHost == null || savedHost.trim().isEmpty()) {
+            connectionPanelPinnedOpen = true;
             setConnectionPanelVisible(true);
             discoverPc();
         } else {
@@ -169,7 +171,11 @@ public class MainActivity extends Activity {
         connectionChip.setGravity(Gravity.CENTER);
         connectionChip.setPadding(dp(13), dp(8), dp(13), dp(8));
         connectionChip.setBackground(roundRect(surfaceAltColor, 99, borderColor, 1));
-        connectionChip.setOnClickListener(v -> setConnectionPanelVisible(connectionPanel.getVisibility() != View.VISIBLE));
+        connectionChip.setOnClickListener(v -> {
+            boolean show = connectionPanel.getVisibility() != View.VISIBLE;
+            connectionPanelPinnedOpen = show;
+            setConnectionPanelVisible(show);
+        });
         header.addView(connectionChip);
 
         root.addView(header, matchWrap());
@@ -240,7 +246,7 @@ public class MainActivity extends Activity {
         badges.setOrientation(LinearLayout.HORIZONTAL);
         badges.setGravity(Gravity.CENTER_VERTICAL);
 
-        operationBadge = badge("COPY", CYAN, darkMode ? 0xFF08353B : 0xFFE7FAFC);
+        operationBadge = badge("COPY", CYAN_DARK, darkMode ? 0xFF12353A : 0xFFE4F9FB);
         badges.addView(operationBadge);
 
         statusBadge = badge("CONNECTING", secondaryTextColor, surfaceAltColor);
@@ -335,12 +341,14 @@ public class MainActivity extends Activity {
         String host = CampTransferClient.normalizeHost(hostEdit.getText().toString());
         if (host.isEmpty()) {
             setConnectionChip("●  Enter PC address", AMBER, false);
+            connectionPanelPinnedOpen = true;
             setConnectionPanelVisible(true);
             return;
         }
         hostEdit.setText(host);
         prefs.edit().putString(PREF_HOST, host).apply();
         setConnectionChip("●  Connecting", AMBER, false);
+        connectionPanelPinnedOpen = false;
         pollOnce();
     }
 
@@ -356,6 +364,7 @@ public class MainActivity extends Activity {
                     hostEdit.setText(pc.host);
                     discoverButton.setText("Discover on Wi-Fi");
                     discoverButton.setEnabled(true);
+                    connectionPanelPinnedOpen = false;
                     setConnectionChip("●  Found " + pc.pcName, GREEN, true);
                     pollOnce();
                 });
@@ -369,6 +378,7 @@ public class MainActivity extends Activity {
                         pollOnce();
                     } else {
                         setConnectionChip("●  Not connected", RED, false);
+                        connectionPanelPinnedOpen = true;
                         setConnectionPanelVisible(true);
                     }
                 });
@@ -404,6 +414,7 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 setConnectionChip("●  Offline", RED, false);
                 sectionEyebrow.setText("CONNECTION LOST");
+                sectionEyebrow.setTextColor(RED);
                 statusBadge.setText("WAITING");
                 styleBadge(statusBadge, RED, darkMode ? 0xFF3A2022 : 0xFFFFECEE);
                 queueSummaryText.setText("Trying " + host);
@@ -419,7 +430,7 @@ public class MainActivity extends Activity {
         JSONArray queue = status.optJSONArray("queue");
 
         setConnectionChip("●  Connected to " + pcName, GREEN, true);
-        setConnectionPanelVisible(false);
+        if (!connectionPanelPinnedOpen) setConnectionPanelVisible(false);
         finishActionText.setText("When finished: " + whenFinished);
 
         JSONObject active = status.optJSONObject("active");
@@ -434,7 +445,7 @@ public class MainActivity extends Activity {
             activeFileText.setText(queueComplete ? "Queue complete" : filesLeft > 0 ? "Waiting for next file" : "Nothing transferring");
             operationBadge.setText("IDLE");
             styleBadge(operationBadge, secondaryTextColor, surfaceAltColor);
-            statusBadge.setText(queueComplete ? "COMPLETED" : state.toUpperCase(Locale.getDefault()));
+            statusBadge.setText(queueComplete ? "COMPLETED" : compactStatus(state).toUpperCase(Locale.getDefault()));
             styleStatusBadge(statusBadge, state, queueComplete);
             progressBar.setProgress(queueComplete ? 1000 : 0);
             progressText.setText(queueComplete ? "100%" : "0.0%");
@@ -553,7 +564,7 @@ public class MainActivity extends Activity {
         metaRow.addView(pct);
 
         TextView statusText = text("  •  " + compactStatus(status), 12, false,
-                statusLooksProblematic(status) ? (status.startsWith("Retrying") ? AMBER : RED) : secondaryTextColor);
+                statusLooksProblematic(status) ? (startsWithIgnoreCase(status, "Retrying") ? AMBER : RED) : secondaryTextColor);
         metaRow.addView(statusText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         card.addView(metaRow);
 
@@ -585,13 +596,12 @@ public class MainActivity extends Activity {
     }
 
     private void styleStatusBadge(TextView badge, String status, boolean complete) {
-        if (complete || status.equalsIgnoreCase("Completed") || status.equalsIgnoreCase("Queue complete")) {
+        String lower = status == null ? "" : status.toLowerCase(Locale.ROOT);
+        if (complete || lower.equals("completed") || lower.equals("queue complete")) {
             styleBadge(badge, GREEN, darkMode ? 0xFF173326 : 0xFFE8F8EF);
-        } else if (status.startsWith("Retrying", StringComparison.IGNORE_CASE) || status.toLowerCase(Locale.ROOT).contains("paused")) {
+        } else if (lower.startsWith("retrying") || lower.contains("paused")) {
             styleBadge(badge, AMBER, darkMode ? 0xFF382D1D : 0xFFFFF3DD);
-        } else if (status.toLowerCase(Locale.ROOT).contains("error") ||
-                status.toLowerCase(Locale.ROOT).contains("cleanup pending") ||
-                status.toLowerCase(Locale.ROOT).contains("cancelled")) {
+        } else if (lower.contains("error") || lower.contains("cleanup pending") || lower.contains("cancelled")) {
             styleBadge(badge, RED, darkMode ? 0xFF3A2022 : 0xFFFFECEE);
         } else {
             styleBadge(badge, CYAN_DARK, darkMode ? 0xFF12353A : 0xFFE4F9FB);
@@ -604,18 +614,23 @@ public class MainActivity extends Activity {
     }
 
     private boolean statusLooksProblematic(String status) {
-        String lower = status.toLowerCase(Locale.ROOT);
+        String lower = status == null ? "" : status.toLowerCase(Locale.ROOT);
         return lower.startsWith("retrying") || lower.contains("error") ||
                 lower.contains("cleanup pending") || lower.contains("cancelled");
     }
 
     private String compactStatus(String status) {
         if (status == null || status.trim().isEmpty()) return "Queued";
-        if (status.startsWith("Source cleanup pending", StringComparison.IGNORE_CASE)) return "Source cleanup pending";
-        if (status.startsWith("Retrying", StringComparison.IGNORE_CASE)) return status;
+        if (startsWithIgnoreCase(status, "Source cleanup pending")) return "Source cleanup pending";
+        if (startsWithIgnoreCase(status, "Retrying")) return status;
         int colon = status.indexOf(':');
         if (colon > 0 && colon < 24) return status.substring(0, colon);
         return status;
+    }
+
+    private static boolean startsWithIgnoreCase(String value, String prefix) {
+        if (value == null || prefix == null || value.length() < prefix.length()) return false;
+        return value.regionMatches(true, 0, prefix, 0, prefix.length());
     }
 
     private void startBackgroundMonitor() {
@@ -693,9 +708,5 @@ public class MainActivity extends Activity {
 
     private static String blankAsDash(String value) {
         return value == null || value.trim().isEmpty() ? "—" : value;
-    }
-
-    private static final class StringComparison {
-        static final int IGNORE_CASE = 1;
     }
 }
