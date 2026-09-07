@@ -11,14 +11,20 @@ internal sealed class RelayServer : IDisposable
 {
     public const int Port = 80;
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan CommandExpireAfter = TimeSpan.FromSeconds(60);
 
     private readonly object _snapshotLock = new();
+    private readonly object _controlLock = new();
     private CancellationTokenSource? _cts;
     private TcpListener? _listener;
     private Task? _listenTask;
     private string? _snapshotJson;
     private DateTimeOffset? _lastReceivedUtc;
     private string _lastSource = "";
+    private string _controlToken = "";
+    private string _pairingCode = "";
+    private string _pcName = "";
+    private readonly List<PendingCommand> _pendingCommands = [];
 
     public bool IsRunning { get; private set; }
     public string LastError { get; private set; } = "";
@@ -72,6 +78,12 @@ internal sealed class RelayServer : IDisposable
         _listener = null;
         _cts?.Dispose();
         _cts = null;
+        lock (_controlLock)
+        {
+            foreach (var command in _pendingCommands)
+                command.Completion.TrySetResult(new CommandResult(false, "Relay stopped before CampTransfer acknowledged the command."));
+            _pendingCommands.Clear();
+        }
         StatusChanged?.Invoke();
     }
 
@@ -101,84 +113,62 @@ internal sealed class RelayServer : IDisposable
         {
             try
             {
-                client.ReceiveTimeout = 4000;
-                client.SendTimeout = 4000;
+                client.ReceiveTimeout = 5000;
+                client.SendTimeout = 7000;
                 await using var stream = client.GetStream();
                 var request = await ReadRequestAsync(stream, token);
                 if (request is null) return;
 
                 if (request.RequestLine.StartsWith("POST /api/status ", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (request.Body.Length == 0)
-                    {
-                        await WriteResponseAsync(stream, "400 Bad Request", "application/json; charset=utf-8",
-                            "{\"error\":\"Missing status body\"}", token);
-                        return;
-                    }
-
-                    var json = Encoding.UTF8.GetString(request.Body);
-                    using (JsonDocument.Parse(json)) { }
-
-                    lock (_snapshotLock)
-                    {
-                        _snapshotJson = json;
-                        _lastReceivedUtc = DateTimeOffset.UtcNow;
-                        _lastSource = client.Client.RemoteEndPoint?.ToString() ?? "CampTransfer";
-                    }
-                    StatusChanged?.Invoke();
-                    await WriteResponseAsync(stream, "204 No Content", "text/plain", "", token);
+                    await HandleStatusPostAsync(stream, request, client, token);
                     return;
                 }
 
                 if (request.RequestLine.StartsWith("GET /api/status ", StringComparison.OrdinalIgnoreCase))
                 {
-                    string? snapshot;
-                    DateTimeOffset? received;
-                    lock (_snapshotLock)
-                    {
-                        snapshot = _snapshotJson;
-                        received = _lastReceivedUtc;
-                    }
-
-                    if (snapshot is null || received is null)
-                    {
-                        var waiting = JsonSerializer.Serialize(new
-                        {
-                            service = "CampTransferRelay",
-                            ready = false,
-                            relayName = Environment.MachineName,
-                            message = "Waiting for CampTransfer"
-                        });
-                        await WriteResponseAsync(stream, "503 Service Unavailable", "application/json; charset=utf-8", waiting, token);
-                        return;
-                    }
-
-                    var age = DateTimeOffset.UtcNow - received.Value;
-                    var node = JsonNode.Parse(snapshot) as JsonObject ?? new JsonObject();
-                    node["viaRelay"] = true;
-                    node["relay"] = new JsonObject
-                    {
-                        ["serverName"] = Environment.MachineName,
-                        ["receivedUtc"] = received.Value.ToString("O"),
-                        ["ageSeconds"] = Math.Round(Math.Max(0, age.TotalSeconds), 1),
-                        ["stale"] = age > StaleAfter
-                    };
-
-                    await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", node.ToJsonString(), token);
+                    await HandleStatusGetAsync(stream, token);
                     return;
                 }
 
                 if (request.RequestLine.StartsWith("GET /api/ping ", StringComparison.OrdinalIgnoreCase))
                 {
+                    bool controlAvailable;
+                    lock (_controlLock) controlAvailable = !string.IsNullOrWhiteSpace(_controlToken);
                     var json = JsonSerializer.Serialize(new
                     {
                         service = "CampTransferRelay",
-                        apiVersion = 1,
+                        apiVersion = 2,
                         relayName = Environment.MachineName,
                         port = Port,
-                        ready = GetStatus().HasSnapshot
+                        ready = GetStatus().HasSnapshot,
+                        remoteControlAvailable = controlAvailable
                     });
                     await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", json, token);
+                    return;
+                }
+
+                if (request.RequestLine.StartsWith("POST /api/pair ", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandlePairAsync(stream, request, token);
+                    return;
+                }
+
+                if (request.RequestLine.StartsWith("POST /api/control ", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleRemoteControlAsync(stream, request, token);
+                    return;
+                }
+
+                if (request.RequestLine.StartsWith("GET /api/commands ", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleGetCommandsAsync(stream, request, token);
+                    return;
+                }
+
+                if (request.RequestLine.StartsWith("POST /api/command-result ", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleCommandResultAsync(stream, request, token);
                     return;
                 }
 
@@ -188,13 +178,263 @@ internal sealed class RelayServer : IDisposable
             {
                 try
                 {
-                    await using var stream = client.GetStream();
-                    await WriteResponseAsync(stream, "400 Bad Request", "application/json; charset=utf-8",
-                        "{\"error\":\"Invalid JSON\"}", token);
+                    await WriteResponseAsync(client.GetStream(), "400 Bad Request", "application/json; charset=utf-8",
+                        "{\"ok\":false,\"message\":\"Invalid JSON\"}", token);
                 }
                 catch { }
             }
             catch { }
+        }
+    }
+
+    private async Task HandleStatusPostAsync(NetworkStream stream, HttpRequest request, TcpClient client, CancellationToken token)
+    {
+        if (request.Body.Length == 0)
+        {
+            await WriteResponseAsync(stream, "400 Bad Request", "application/json; charset=utf-8",
+                "{\"error\":\"Missing status body\"}", token);
+            return;
+        }
+
+        var json = Encoding.UTF8.GetString(request.Body);
+        using (JsonDocument.Parse(json)) { }
+
+        lock (_snapshotLock)
+        {
+            _snapshotJson = json;
+            _lastReceivedUtc = DateTimeOffset.UtcNow;
+            _lastSource = client.Client.RemoteEndPoint?.ToString() ?? "CampTransfer";
+        }
+
+        request.Headers.TryGetValue("X-CampTransfer-Control-Token", out var newToken);
+        request.Headers.TryGetValue("X-CampTransfer-Pairing-Code", out var newCode);
+        request.Headers.TryGetValue("X-CampTransfer-PC", out var newPcName);
+        if (!string.IsNullOrWhiteSpace(newToken) && !string.IsNullOrWhiteSpace(newCode))
+        {
+            lock (_controlLock)
+            {
+                if (!string.Equals(_controlToken, newToken, StringComparison.Ordinal) && _pendingCommands.Count > 0)
+                {
+                    foreach (var pending in _pendingCommands)
+                        pending.Completion.TrySetResult(new CommandResult(false, "Remote pairing changed before this command completed."));
+                    _pendingCommands.Clear();
+                }
+                _controlToken = newToken.Trim();
+                _pairingCode = newCode.Trim();
+                _pcName = string.IsNullOrWhiteSpace(newPcName) ? "CampTransfer" : newPcName.Trim();
+                ExpireCommandsLocked();
+            }
+        }
+
+        StatusChanged?.Invoke();
+        await WriteResponseAsync(stream, "204 No Content", "text/plain", "", token);
+    }
+
+    private async Task HandleStatusGetAsync(NetworkStream stream, CancellationToken token)
+    {
+        string? snapshot;
+        DateTimeOffset? received;
+        lock (_snapshotLock)
+        {
+            snapshot = _snapshotJson;
+            received = _lastReceivedUtc;
+        }
+
+        if (snapshot is null || received is null)
+        {
+            var waiting = JsonSerializer.Serialize(new
+            {
+                service = "CampTransferRelay",
+                ready = false,
+                relayName = Environment.MachineName,
+                message = "Waiting for CampTransfer"
+            });
+            await WriteResponseAsync(stream, "503 Service Unavailable", "application/json; charset=utf-8", waiting, token);
+            return;
+        }
+
+        var age = DateTimeOffset.UtcNow - received.Value;
+        var node = JsonNode.Parse(snapshot) as JsonObject ?? new JsonObject();
+        node["viaRelay"] = true;
+        node["relay"] = new JsonObject
+        {
+            ["serverName"] = Environment.MachineName,
+            ["receivedUtc"] = received.Value.ToString("O"),
+            ["ageSeconds"] = Math.Round(Math.Max(0, age.TotalSeconds), 1),
+            ["stale"] = age > StaleAfter
+        };
+
+        await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", node.ToJsonString(), token);
+    }
+
+    private async Task HandlePairAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        string expectedCode;
+        string controlToken;
+        string pcName;
+        lock (_controlLock)
+        {
+            expectedCode = _pairingCode;
+            controlToken = _controlToken;
+            pcName = _pcName;
+        }
+
+        if (string.IsNullOrWhiteSpace(controlToken) || string.IsNullOrWhiteSpace(expectedCode))
+        {
+            await WriteResponseAsync(stream, "503 Service Unavailable", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"CampTransfer has not supplied remote-control pairing information yet\"}", token);
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(request.Body);
+        var code = doc.RootElement.TryGetProperty("code", out var codeElement) ? codeElement.GetString() ?? "" : "";
+        if (!string.Equals(code.Trim(), expectedCode, StringComparison.Ordinal))
+        {
+            await WriteResponseAsync(stream, "403 Forbidden", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Pairing code was not accepted\"}", token);
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(new
+        {
+            ok = true,
+            token = controlToken,
+            pcName,
+            message = "CampTransfer Remote paired successfully through the relay."
+        });
+        await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", json, token);
+    }
+
+    private async Task HandleRemoteControlAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        if (!IsAuthorized(request.Headers))
+        {
+            await WriteResponseAsync(stream, "401 Unauthorized", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Pair CampTransfer Remote first\"}", token);
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(request.Body);
+        var action = doc.RootElement.TryGetProperty("action", out var actionElement) ? actionElement.GetString() ?? "" : "";
+        string? value = null;
+        if (doc.RootElement.TryGetProperty("value", out var valueElement))
+        {
+            value = valueElement.ValueKind == JsonValueKind.String
+                ? valueElement.GetString()
+                : valueElement.GetRawText();
+        }
+
+        if (!IsAllowedAction(action))
+        {
+            await WriteResponseAsync(stream, "400 Bad Request", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Unknown remote command\"}", token);
+            return;
+        }
+
+        var pending = new PendingCommand(Guid.NewGuid().ToString("N"), action, value);
+        lock (_controlLock)
+        {
+            ExpireCommandsLocked();
+            _pendingCommands.Add(pending);
+        }
+
+        var finished = await Task.WhenAny(pending.Completion.Task, Task.Delay(TimeSpan.FromSeconds(6), token));
+        if (finished == pending.Completion.Task)
+        {
+            var result = await pending.Completion.Task;
+            var json = JsonSerializer.Serialize(new { ok = result.Ok, message = result.Message, acknowledged = true });
+            await WriteResponseAsync(stream, result.Ok ? "200 OK" : "409 Conflict", "application/json; charset=utf-8", json, token);
+            return;
+        }
+
+        var queued = JsonSerializer.Serialize(new
+        {
+            ok = true,
+            queued = true,
+            acknowledged = false,
+            message = "Command queued; waiting for CampTransfer acknowledgement."
+        });
+        await WriteResponseAsync(stream, "202 Accepted", "application/json; charset=utf-8", queued, token);
+    }
+
+    private async Task HandleGetCommandsAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        if (!IsAuthorized(request.Headers))
+        {
+            await WriteResponseAsync(stream, "401 Unauthorized", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Unauthorized\"}", token);
+            return;
+        }
+
+        List<object> ready;
+        lock (_controlLock)
+        {
+            ExpireCommandsLocked();
+            var now = DateTimeOffset.UtcNow;
+            var commands = _pendingCommands
+                .Where(c => !c.LastDeliveredUtc.HasValue || now - c.LastDeliveredUtc.Value > TimeSpan.FromSeconds(3))
+                .Take(8)
+                .ToList();
+            foreach (var command in commands)
+                command.LastDeliveredUtc = now;
+            ready = commands.Select(c => (object)new { c.Id, c.Action, c.Value }).ToList();
+        }
+
+        if (ready.Count == 0)
+        {
+            await WriteResponseAsync(stream, "204 No Content", "application/json; charset=utf-8", "", token);
+            return;
+        }
+
+        await WriteResponseAsync(stream, "200 OK", "application/json; charset=utf-8", JsonSerializer.Serialize(ready), token);
+    }
+
+    private async Task HandleCommandResultAsync(NetworkStream stream, HttpRequest request, CancellationToken token)
+    {
+        if (!IsAuthorized(request.Headers))
+        {
+            await WriteResponseAsync(stream, "401 Unauthorized", "application/json; charset=utf-8",
+                "{\"ok\":false,\"message\":\"Unauthorized\"}", token);
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(request.Body);
+        var id = doc.RootElement.TryGetProperty("id", out var idElement) ? idElement.GetString() ?? "" : "";
+        var ok = doc.RootElement.TryGetProperty("ok", out var okElement) && okElement.GetBoolean();
+        var message = doc.RootElement.TryGetProperty("message", out var messageElement) ? messageElement.GetString() ?? "" : "";
+
+        PendingCommand? matched = null;
+        lock (_controlLock)
+        {
+            matched = _pendingCommands.FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal));
+            if (matched is not null)
+                _pendingCommands.Remove(matched);
+        }
+
+        matched?.Completion.TrySetResult(new CommandResult(ok, message));
+        await WriteResponseAsync(stream, "204 No Content", "text/plain", "", token);
+    }
+
+    private bool IsAuthorized(IReadOnlyDictionary<string, string> headers)
+    {
+        if (!headers.TryGetValue("Authorization", out var auth)) return false;
+        const string prefix = "Bearer ";
+        if (!auth.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var presented = auth[prefix.Length..].Trim();
+        lock (_controlLock)
+            return !string.IsNullOrWhiteSpace(_controlToken) && string.Equals(presented, _controlToken, StringComparison.Ordinal);
+    }
+
+    private static bool IsAllowedAction(string action) => action is
+        "start" or "pause" or "resume" or "cancelCurrent" or "pauseAfterCurrent" or "setUploadLimit";
+
+    private void ExpireCommandsLocked()
+    {
+        var cutoff = DateTimeOffset.UtcNow - CommandExpireAfter;
+        foreach (var expired in _pendingCommands.Where(c => c.CreatedUtc < cutoff).ToList())
+        {
+            _pendingCommands.Remove(expired);
+            expired.Completion.TrySetResult(new CommandResult(false, "Remote command expired before CampTransfer acknowledged it."));
         }
     }
 
@@ -220,6 +460,7 @@ internal sealed class RelayServer : IDisposable
         var lines = headerText.Split(new[] { "\r\n" }, StringSplitOptions.None);
         if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0])) return null;
 
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var contentLength = 0;
         for (var i = 1; i < lines.Length; i++)
         {
@@ -228,6 +469,7 @@ internal sealed class RelayServer : IDisposable
             if (colon <= 0) continue;
             var name = line[..colon].Trim();
             var value = line[(colon + 1)..].Trim();
+            headers[name] = value;
             if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                 int.TryParse(value, out contentLength);
         }
@@ -249,7 +491,7 @@ internal sealed class RelayServer : IDisposable
             offset += read;
         }
 
-        return new HttpRequest(lines[0], body);
+        return new HttpRequest(lines[0], headers, body);
     }
 
     private static int FindHeaderEnd(byte[] data, int length)
@@ -313,7 +555,27 @@ internal sealed class RelayServer : IDisposable
 
     public void Dispose() => Stop();
 
-    private sealed record HttpRequest(string RequestLine, byte[] Body);
+    private sealed record HttpRequest(string RequestLine, IReadOnlyDictionary<string, string> Headers, byte[] Body);
+
+    private sealed class PendingCommand
+    {
+        public string Id { get; }
+        public string Action { get; }
+        public string? Value { get; }
+        public DateTimeOffset CreatedUtc { get; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? LastDeliveredUtc { get; set; }
+        public TaskCompletionSource<CommandResult> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PendingCommand(string id, string action, string? value)
+        {
+            Id = id;
+            Action = action;
+            Value = value;
+        }
+    }
+
+    private sealed record CommandResult(bool Ok, string Message);
 }
 
 internal sealed record RelayStatus(
