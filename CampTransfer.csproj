@@ -9,4 +9,8 @@
     <RootNamespace>CampTransfer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="relay\**\*.cs" />
+  </ItemGroup>
 </Project>
