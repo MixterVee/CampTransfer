@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
     private void discoverPc() {
         discoverButton.setEnabled(false);
         connectionText.setText("Looking for CampTransfer on this network…");
-        Executors.newSingleThreadExecutor().execute(() -> {
+        new Thread(() -> {
             try {
                 CampTransferClient.DiscoveredPc pc = CampTransferClient.discover();
                 prefs.edit().putString(PREF_HOST, pc.host).apply();
@@ -202,7 +202,7 @@ public class MainActivity extends Activity {
                     }
                 });
             }
-        });
+        }, "CampTransfer-discovery").start();
     }
 
     private void startPolling() {
@@ -219,7 +219,7 @@ public class MainActivity extends Activity {
     }
 
     private void pollOnce() {
-        Executors.newSingleThreadExecutor().execute(this::pollInBackground);
+        new Thread(this::pollInBackground, "CampTransfer-poll-once").start();
     }
 
     private void pollInBackground() {
@@ -245,6 +245,7 @@ public class MainActivity extends Activity {
         finishActionText.setText("When finished: " + whenFinished);
 
         JSONObject active = status.optJSONObject("active");
+        String activeId = active == null ? "" : active.optString("id", "");
         if (active == null) {
             activeFileText.setText(filesLeft == 0 ? "Queue complete / idle" : "Waiting for next file");
             progressBar.setProgress(filesLeft == 0 ? 1000 : 0);
@@ -277,7 +278,8 @@ public class MainActivity extends Activity {
                 if (item == null) continue;
                 if (lines.length() > 0) lines.append("\n\n");
                 boolean complete = item.optBoolean("completed", false);
-                String marker = complete ? "✓" : item == active ? "▶" : "•";
+                boolean isActive = !activeId.isEmpty() && activeId.equals(item.optString("id", ""));
+                String marker = complete ? "✓" : isActive ? "▶" : "•";
                 lines.append(marker).append(' ')
                         .append(item.optString("operation", "Copy"))
                         .append("  ")
