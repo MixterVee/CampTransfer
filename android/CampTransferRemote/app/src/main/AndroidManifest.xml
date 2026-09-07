@@ -15,7 +15,7 @@
         android:usesCleartextTraffic="true">
 
         <activity
-            android:name=".MainActivityV20"
+            android:name=".MainActivityV30"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
