@@ -52,6 +52,7 @@ public class MainActivityV30 extends MainActivityV20 {
 
     private volatile boolean lastPaused;
     private boolean updatingPauseAfter;
+    private boolean uploadSelectionPending;
 
     private int surfaceColor;
     private int surfaceAltColor;
@@ -175,6 +176,10 @@ public class MainActivityV30 extends MainActivityV20 {
                 this, android.R.layout.simple_spinner_item, UPLOAD_LIMITS);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         uploadSpinner.setAdapter(adapter);
+        uploadSpinner.setOnTouchListener((v, event) -> {
+            uploadSelectionPending = true;
+            return false;
+        });
         uploadRow.addView(uploadSpinner, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
         applyUploadButton = new Button(this);
@@ -267,6 +272,8 @@ public class MainActivityV30 extends MainActivityV20 {
                 CampTransferClient.ControlResult result = CampTransferClient.sendBestControl(
                         direct, relay, token, action, value);
                 mainHandler.post(() -> {
+                    if ("setUploadLimit".equals(action) && result.ok)
+                        uploadSelectionPending = false;
                     setCommandStatus(result.message);
                     Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show();
                     pollControlState();
@@ -338,9 +345,11 @@ public class MainActivityV30 extends MainActivityV20 {
         pauseAfterCheck.setChecked(pauseAfter);
         updatingPauseAfter = false;
 
-        int index = UPLOAD_LIMITS.indexOf(uploadLimit);
-        if (index >= 0 && uploadSpinner.getSelectedItemPosition() != index)
-            uploadSpinner.setSelection(index);
+        if (!uploadSelectionPending) {
+            int index = UPLOAD_LIMITS.indexOf(uploadLimit);
+            if (index >= 0 && uploadSpinner.getSelectedItemPosition() != index)
+                uploadSpinner.setSelection(index);
+        }
 
         if (!controlAvailable) {
             pairStatusText.setText("Remote control is not available on the connected CampTransfer build.");
