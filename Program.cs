@@ -11,6 +11,7 @@ internal static class Program
         StartButtonAccent.Apply(form);
         DestinationQueueSync.Attach(form);
         QueueEditingIntegration.Attach(form);
+        RemoteControlIntegration.Attach(form);
         RemoteMonitorIntegration.Attach(form);
         RemoteRelayIntegration.Attach(form);
         Application.Run(form);
