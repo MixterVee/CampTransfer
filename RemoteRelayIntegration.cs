@@ -29,7 +29,7 @@ internal static class RemoteRelayIntegration
                 c.Items.Cast<object>().Any(i => string.Equals(i?.ToString(), "0.25 Mbps", StringComparison.OrdinalIgnoreCase)));
 
         var settings = RemoteRelayPreferences.Load();
-        using var publisher = new RemoteRelayPublisher(settings);
+        var publisher = new RemoteRelayPublisher(settings);
 
         var relayButton = new Button
         {
@@ -114,6 +114,7 @@ internal static class RemoteRelayIntegration
         {
             timer.Stop();
             timer.Dispose();
+            publisher.Dispose();
         };
     }
 
