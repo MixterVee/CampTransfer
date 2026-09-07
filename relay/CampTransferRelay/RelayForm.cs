@@ -15,15 +15,24 @@ internal sealed class RelayForm : Form
     private readonly CheckBox _startWithWindows;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly NotifyIcon _trayIcon;
+    private readonly bool _startInTray;
     private bool _exitRequested;
 
-    public RelayForm()
+    public RelayForm(bool startInTray = false)
     {
+        _startInTray = startInTray;
+
         Text = "CampTransfer Relay";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(520, 330);
         Size = new Size(620, 390);
         Font = new Font("Segoe UI", 10f);
+
+        if (_startInTray)
+        {
+            ShowInTaskbar = false;
+            WindowState = FormWindowState.Minimized;
+        }
 
         _trayIcon = BuildTrayIcon();
 
@@ -61,19 +70,25 @@ internal sealed class RelayForm : Form
         AddRow(root, 3, "CampTransfer", out _sourceValue);
         AddRow(root, 4, "Last update", out _lastUpdateValue);
 
+        var startupEnabled = IsStartupEnabled();
         _startWithWindows = new CheckBox
         {
-            Text = "Start CampTransfer Relay with Windows",
+            Text = "Start CampTransfer Relay with Windows (in tray)",
             AutoSize = true,
-            Checked = IsStartupEnabled(),
+            Checked = startupEnabled,
             Anchor = AnchorStyles.Left
         };
         _startWithWindows.CheckedChanged += (_, _) => SetStartupEnabled(_startWithWindows.Checked);
         root.Controls.Add(_startWithWindows, 1, 5);
 
+        // Migrate existing startup entries from older builds so the next Windows login
+        // launches the relay hidden in the notification area.
+        if (startupEnabled)
+            SetStartupEnabled(true);
+
         var help = new Label
         {
-            Text = "CampTransfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. Use the tray icon menu to exit completely.",
+            Text = "CampTransfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. When started with Windows it opens directly in the tray. Use the tray icon menu to exit completely.",
             AutoSize = false,
             Dock = DockStyle.Fill,
             ForeColor = SystemColors.GrayText,
@@ -106,6 +121,11 @@ internal sealed class RelayForm : Form
         _timer.Tick += (_, _) => RefreshStatus();
         _timer.Start();
         RefreshStatus();
+
+        if (_startInTray)
+        {
+            Shown += (_, _) => BeginInvoke(HideToTray);
+        }
 
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
@@ -151,6 +171,7 @@ internal sealed class RelayForm : Form
 
     private void HideToTray()
     {
+        if (IsDisposed) return;
         ShowInTaskbar = false;
         Hide();
         _trayIcon.Visible = true;
@@ -267,7 +288,7 @@ internal sealed class RelayForm : Form
             if (enabled)
             {
                 var exe = Application.ExecutablePath;
-                key.SetValue(RunValueName, $"\"{exe}\"");
+                key.SetValue(RunValueName, $"\"{exe}\" --tray");
             }
             else
             {
