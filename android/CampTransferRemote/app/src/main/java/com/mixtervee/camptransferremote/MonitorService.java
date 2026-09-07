@@ -29,7 +29,7 @@ public class MonitorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        prefs = getSharedPreferences(MainActivity.PREFS, MODE_PRIVATE);
+        prefs = getSharedPreferences(MainActivityV20.PREFS, MODE_PRIVATE);
         createNotificationChannel();
         startForeground(FOREGROUND_ID, buildNotification(
                 "CampTransfer Remote",
@@ -60,31 +60,47 @@ public class MonitorService extends Service {
     }
 
     private void poll() {
-        String host = prefs.getString(MainActivity.PREF_HOST, "");
-        if (host == null || host.trim().isEmpty()) {
+        String direct = prefs.getString(MainActivityV20.PREF_HOST, "");
+        String relay = prefs.getString(MainActivityV20.PREF_RELAY_HOST, "");
+        boolean noDirect = direct == null || direct.trim().isEmpty();
+        boolean noRelay = relay == null || relay.trim().isEmpty();
+        if (noDirect && noRelay) {
             stopSelf();
             return;
         }
 
         try {
-            JSONObject status = CampTransferClient.fetchStatus(host);
-            updateFromStatus(status);
+            CampTransferClient.StatusResult result = CampTransferClient.fetchBestStatus(direct, relay);
+            updateFromStatus(result.status, result.viaRelay);
         } catch (Exception ex) {
+            String detail = noRelay
+                    ? "Waiting for CampTransfer • " + direct
+                    : "Waiting for CampTransfer • direct + relay";
             Notification waiting = buildNotification(
                     "CampTransfer Remote",
-                    "Waiting for CampTransfer • " + host,
+                    detail,
                     -1,
                     true);
             getSystemService(NotificationManager.class).notify(FOREGROUND_ID, waiting);
         }
     }
 
-    private void updateFromStatus(JSONObject status) {
+    private void updateFromStatus(JSONObject status, boolean viaRelay) {
         int filesLeft = status.optInt("filesLeft", 0);
         String pcName = status.optString("pcName", "CampTransfer");
         String state = status.optString("state", "Ready");
         String whenFinished = status.optString("whenFinished", "Do nothing");
         JSONObject active = status.optJSONObject("active");
+        boolean relayStale = false;
+        String relayName = "relay";
+
+        if (viaRelay) {
+            JSONObject relay = status.optJSONObject("relay");
+            if (relay != null) {
+                relayStale = relay.optBoolean("stale", false);
+                relayName = relay.optString("serverName", "relay");
+            }
+        }
 
         if (filesLeft == 0) {
             Notification complete = buildNotification(
@@ -134,12 +150,15 @@ public class MonitorService extends Service {
             lastImportantStatus = important ? itemStatus : "";
         }
 
+        if (viaRelay)
+            detail += relayStale ? " • Relay stale" : " • via " + relayName;
+
         Notification notification = buildNotification(title, detail, progress, true);
         getSystemService(NotificationManager.class).notify(FOREGROUND_ID, notification);
     }
 
     private Notification buildNotification(String title, String text, int progress, boolean ongoing) {
-        Intent openIntent = new Intent(this, MainActivity.class);
+        Intent openIntent = new Intent(this, MainActivityV20.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this,
