@@ -198,8 +198,8 @@ internal sealed class RemoteControlSecurity
         "CampTransfer",
         "remote-control.json");
 
-    public string Token { get; private set; } = "";
-    public string PairingCode { get; private set; } = "";
+    public string Token { get; set; } = "";
+    public string PairingCode { get; set; } = "";
 
     public static RemoteControlSecurity LoadOrCreate()
     {
