@@ -6,25 +6,25 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-# Rebuild the polished fast-turtle artwork from the two checked-in source chunks.
-# Each file is a separately base64-encoded binary chunk, so decode each one first
-# and then concatenate the decoded bytes. Joining the base64 text directly creates
-# invalid padding in the middle of the stream.
+# Rebuild the polished fast-turtle artwork from the checked-in source chunks.
+# The source was split as text, so join it back together, strip whitespace, and
+# restore any final base64 padding before decoding.
 $sourceDir = Join-Path $PSScriptRoot 'turtle-icon'
 $sourceParts = @(
     Join-Path $sourceDir 'source128.part1.b64'
     Join-Path $sourceDir 'source128.part2.b64'
 )
 
-$sourceBytesList = New-Object System.Collections.Generic.List[byte]
 foreach ($part in $sourceParts) {
     if (-not (Test-Path $part)) { throw "Missing Turtle Transfer artwork source: $part" }
-    $chunkText = (Get-Content $part -Raw).Trim()
-    $chunkBytes = [Convert]::FromBase64String($chunkText)
-    $sourceBytesList.AddRange($chunkBytes)
 }
-$sourceBytes = $sourceBytesList.ToArray()
 
+$base64 = ($sourceParts | ForEach-Object { Get-Content $_ -Raw }) -join ''
+$base64 = $base64 -replace '\s',''
+$padding = (4 - ($base64.Length % 4)) % 4
+if ($padding -gt 0) { $base64 += ('=' * $padding) }
+
+$sourceBytes = [Convert]::FromBase64String($base64)
 if ($sourceBytes.Length -lt 20000) {
     throw "Turtle Transfer artwork source is incomplete ($($sourceBytes.Length) bytes)."
 }
