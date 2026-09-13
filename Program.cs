@@ -7,6 +7,17 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
+        using var singleInstance = new Mutex(true, @"Local\CampTransfer.SingleInstance", out var createdNew);
+        if (!createdNew)
+        {
+            MessageBox.Show(
+                "CampTransfer is already running. Check the Windows system tray to reopen it.",
+                "CampTransfer",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
         var form = new MainForm();
         StartButtonAccent.Apply(form);
         DestinationQueueSync.Attach(form);
@@ -14,6 +25,7 @@ internal static class Program
         RemoteControlIntegration.Attach(form);
         RemoteMonitorIntegration.Attach(form);
         RemoteRelayIntegration.Attach(form);
+        MainWindowSafetyIntegration.Attach(form);
         Application.Run(form);
     }
 }
