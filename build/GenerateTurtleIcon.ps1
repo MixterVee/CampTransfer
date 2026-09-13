@@ -6,34 +6,17 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-# Rebuild the polished fast-turtle artwork from the checked-in source chunks.
-# The source was split as text, so join it back together, strip whitespace, and
-# restore any final base64 padding before decoding.
-$sourceDir = Join-Path $PSScriptRoot 'turtle-icon'
-$sourceParts = @(
-    Join-Path $sourceDir 'source128.part1.b64'
-    Join-Path $sourceDir 'source128.part2.b64'
-)
-
-foreach ($part in $sourceParts) {
-    if (-not (Test-Path $part)) { throw "Missing Turtle Transfer artwork source: $part" }
-}
-
-$base64 = ($sourceParts | ForEach-Object { Get-Content $_ -Raw }) -join ''
-$base64 = $base64 -replace '\s',''
-$padding = (4 - ($base64.Length % 4)) % 4
-if ($padding -gt 0) { $base64 += ('=' * $padding) }
-
-$sourceBytes = [Convert]::FromBase64String($base64)
-if ($sourceBytes.Length -lt 20000) {
-    throw "Turtle Transfer artwork source is incomplete ($($sourceBytes.Length) bytes)."
+# Use the approved Turtle Transfer artwork directly. Do not redraw or substitute it.
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$sourcePath = Join-Path $repoRoot 'assets\TurtleTransferSource.png'
+if (-not (Test-Path $sourcePath)) {
+    throw "Missing approved Turtle Transfer artwork source: $sourcePath"
 }
 
 $dir = [System.IO.Path]::GetDirectoryName($OutputPath)
 if ($dir) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
 
-$sourceStream = New-Object System.IO.MemoryStream(,$sourceBytes)
-$sourceImage = [System.Drawing.Image]::FromStream($sourceStream)
+$sourceImage = [System.Drawing.Image]::FromFile($sourcePath)
 $sizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 $images = New-Object System.Collections.Generic.List[byte[]]
 
@@ -92,9 +75,8 @@ try {
 }
 finally {
     $sourceImage.Dispose()
-    $sourceStream.Dispose()
 }
 
 $iconLength = (Get-Item $OutputPath).Length
 if ($iconLength -lt 25000) { throw "Generated Turtle Transfer icon looks incomplete ($iconLength bytes)." }
-Write-Host "Generated polished Turtle Transfer icon: $OutputPath ($iconLength bytes)"
+Write-Host "Generated Turtle Transfer icon from approved artwork: $OutputPath ($iconLength bytes)"
