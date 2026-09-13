@@ -31,6 +31,13 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Restore polished Turtle Transfer launcher artwork
+        shell: bash
+        run: |
+          mkdir -p android/CampTransferRemote/app/src/main/res/drawable
+          cat build/turtle-icon/source128.part1.b64 build/turtle-icon/source128.part2.b64 | tr -d '\r\n' | base64 --decode > android/CampTransferRemote/app/src/main/res/drawable/turtle_transfer.png
+          test $(stat -c%s android/CampTransferRemote/app/src/main/res/drawable/turtle_transfer.png) -gt 20000
+
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
 
