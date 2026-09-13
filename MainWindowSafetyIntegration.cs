@@ -133,7 +133,7 @@ internal static class MainWindowSafetyIntegration
             {
                 if (item.SourceCleanupPending)
                 {
-                    resumable.Add(new ResumeCandidate(item, 0, item.SizeBytes, cleanupOnly: true));
+                    resumable.Add(new ResumeCandidate(item, 0, item.SizeBytes, CleanupOnly: true));
                     continue;
                 }
 
@@ -141,7 +141,7 @@ internal static class MainWindowSafetyIntegration
                 {
                     item.Status = "Resume available";
                     item.ProgressPercent = sourceLength <= 0 ? 100 : (double)resumeBytes / sourceLength * 100;
-                    resumable.Add(new ResumeCandidate(item, resumeBytes, sourceLength, cleanupOnly: false));
+                    resumable.Add(new ResumeCandidate(item, resumeBytes, sourceLength, CleanupOnly: false));
                 }
             }
 
