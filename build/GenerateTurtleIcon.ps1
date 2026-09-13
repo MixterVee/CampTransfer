@@ -3,73 +3,110 @@ param(
     [string]$OutputPath
 )
 
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+
+# Rebuild the polished fast-turtle artwork from its checked-in source chunks.
+# Keeping the source as text avoids GitHub/checkout binary corruption while preserving
+# the actual artwork the Turtle Transfer branding was based on.
+$sourceDir = Join-Path $PSScriptRoot 'turtle-icon'
+$sourceParts = @(
+    Join-Path $sourceDir 'source128.part1.b64'
+    Join-Path $sourceDir 'source128.part2.b64'
+)
+
+foreach ($part in $sourceParts) {
+    if (-not (Test-Path $part)) {
+        throw "Missing Turtle Transfer artwork source: $part"
+    }
+}
+
+$base64 = ($sourceParts | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join ''
+$sourceBytes = [Convert]::FromBase64String($base64)
+if ($sourceBytes.Length -lt 20000) {
+    throw "Turtle Transfer artwork source is incomplete ($($sourceBytes.Length) bytes)."
+}
 
 $dir = [System.IO.Path]::GetDirectoryName($OutputPath)
 if ($dir) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
 
-$bmp = New-Object System.Drawing.Bitmap 256,256
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$g.Clear([System.Drawing.Color]::FromArgb(15,23,30))
+$sourceStream = New-Object System.IO.MemoryStream(,$sourceBytes)
+$sourceImage = [System.Drawing.Image]::FromStream($sourceStream)
 
-# Motion streaks
-$cyan = [System.Drawing.Color]::FromArgb(38,198,218)
-$cyan2 = [System.Drawing.Color]::FromArgb(0,229,255)
-$pen1 = New-Object System.Drawing.Pen($cyan,16)
-$pen1.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-$pen1.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-$g.DrawLine($pen1,22,95,83,95)
-$g.DrawLine($pen1,10,125,70,125)
-$g.DrawLine($pen1,30,155,84,155)
+# Windows chooses different embedded icon sizes for Explorer, taskbar, title bar and
+# the notification area. Generate every useful size from the same polished artwork.
+$sizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+$images = New-Object System.Collections.Generic.List[byte[]]
 
-# Turtle shell
-$shellBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(24,77,84))
-$shellPen = New-Object System.Drawing.Pen($cyan2,10)
-$g.FillEllipse($shellBrush,70,58,125,125)
-$g.DrawEllipse($shellPen,70,58,125,125)
+try {
+    foreach ($size in $sizes) {
+        $bitmap = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceOver
+            $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+            $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+            $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $graphics.DrawImage($sourceImage, 0, 0, $size, $size)
+        }
+        finally {
+            $graphics.Dispose()
+        }
 
-# Shell pattern
-$patternPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(95,232,238),6)
-$g.DrawArc($patternPen,92,80,82,82,210,120)
-$g.DrawArc($patternPen,91,80,82,82,30,120)
-$g.DrawLine($patternPen,133,75,133,170)
-$g.DrawLine($patternPen,88,125,180,125)
+        $png = New-Object System.IO.MemoryStream
+        try {
+            $bitmap.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
+            $images.Add($png.ToArray())
+        }
+        finally {
+            $png.Dispose()
+            $bitmap.Dispose()
+        }
+    }
 
-# Head and limbs
-$bodyBrush = New-Object System.Drawing.SolidBrush($cyan2)
-$g.FillEllipse($bodyBrush,181,92,45,38)
-$g.FillEllipse($bodyBrush,92,42,25,35)
-$g.FillEllipse($bodyBrush,92,170,25,35)
-$g.FillEllipse($bodyBrush,153,43,25,34)
-$g.FillEllipse($bodyBrush,153,170,25,34)
-$g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)),207,104,6,6)
+    # ICO container header followed by PNG-backed icon entries. PNG-backed entries
+    # retain the glossy cyan details much better than converting them to old BMP icons.
+    $file = [System.IO.File]::Create($OutputPath)
+    $writer = New-Object System.IO.BinaryWriter($file)
+    try {
+        $writer.Write([UInt16]0)                 # reserved
+        $writer.Write([UInt16]1)                 # icon
+        $writer.Write([UInt16]$sizes.Count)
 
-# Subtle transfer arrow on shell
-$arrowPen = New-Object System.Drawing.Pen([System.Drawing.Color]::White,7)
-$arrowPen.EndCap = [System.Drawing.Drawing2D.LineCap]::ArrowAnchor
-$g.DrawLine($arrowPen,105,125,164,125)
+        [UInt32]$offset = 6 + (16 * $sizes.Count)
+        for ($i = 0; $i -lt $sizes.Count; $i++) {
+            $size = $sizes[$i]
+            $data = $images[$i]
+            $writer.Write([byte]$(if ($size -ge 256) { 0 } else { $size }))
+            $writer.Write([byte]$(if ($size -ge 256) { 0 } else { $size }))
+            $writer.Write([byte]0)               # color count
+            $writer.Write([byte]0)               # reserved
+            $writer.Write([UInt16]1)             # planes
+            $writer.Write([UInt16]32)            # bits per pixel
+            $writer.Write([UInt32]$data.Length)
+            $writer.Write([UInt32]$offset)
+            $offset += [UInt32]$data.Length
+        }
 
-$g.Dispose()
-$pen1.Dispose(); $shellPen.Dispose(); $patternPen.Dispose(); $arrowPen.Dispose()
-$shellBrush.Dispose(); $bodyBrush.Dispose()
-
-$hIcon = $bmp.GetHicon()
-$icon = [System.Drawing.Icon]::FromHandle($hIcon)
-$fs = [System.IO.File]::Create($OutputPath)
-$icon.Save($fs)
-$fs.Dispose()
-$icon.Dispose()
-$bmp.Dispose()
-
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class NativeIconCleanup {
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    public static extern bool DestroyIcon(IntPtr handle);
+        foreach ($data in $images) {
+            $writer.Write($data)
+        }
+    }
+    finally {
+        $writer.Dispose()
+        $file.Dispose()
+    }
 }
-"@
-[NativeIconCleanup]::DestroyIcon($hIcon) | Out-Null
+finally {
+    $sourceImage.Dispose()
+    $sourceStream.Dispose()
+}
 
-Write-Host "Generated $OutputPath"
+$iconLength = (Get-Item $OutputPath).Length
+if ($iconLength -lt 25000) {
+    throw "Generated Turtle Transfer icon looks incomplete ($iconLength bytes)."
+}
+
+Write-Host "Generated polished Turtle Transfer icon: $OutputPath ($iconLength bytes)"
