@@ -19,6 +19,10 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Generate polished Turtle Transfer icon
+        shell: pwsh
+        run: ./build/GenerateTurtleIcon.ps1 -OutputPath assets/TurtleTransfer.ico
+
       - name: Publish single EXE
         run: dotnet publish CampTransfer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 
