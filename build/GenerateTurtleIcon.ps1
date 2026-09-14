@@ -6,17 +6,25 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-# Use the approved Turtle Transfer artwork directly. Do not redraw or substitute it.
-$repoRoot = Split-Path $PSScriptRoot -Parent
-$sourcePath = Join-Path $repoRoot 'assets\TurtleTransferSource.png'
+# Use the exact approved full Turtle Transfer artwork source.
+# This is the full square master (not the cropped preview/source that caused the half-icon bug).
+$sourcePath = Join-Path $PSScriptRoot 'turtle-icon\source256-full.b64'
 if (-not (Test-Path $sourcePath)) {
     throw "Missing approved Turtle Transfer artwork source: $sourcePath"
+}
+
+$sourceBase64 = (Get-Content $sourcePath -Raw) -replace '\s',''
+$sourceBytes = [Convert]::FromBase64String($sourceBase64)
+$sourceStream = New-Object System.IO.MemoryStream(,$sourceBytes)
+$sourceImage = [System.Drawing.Image]::FromStream($sourceStream)
+
+if ($sourceImage.Width -ne $sourceImage.Height -or $sourceImage.Width -lt 256) {
+    throw "Approved Turtle Transfer artwork must be square and at least 256px; got $($sourceImage.Width)x$($sourceImage.Height)."
 }
 
 $dir = [System.IO.Path]::GetDirectoryName($OutputPath)
 if ($dir) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
 
-$sourceImage = [System.Drawing.Image]::FromFile($sourcePath)
 $sizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 $images = New-Object System.Collections.Generic.List[byte[]]
 
@@ -75,8 +83,9 @@ try {
 }
 finally {
     $sourceImage.Dispose()
+    $sourceStream.Dispose()
 }
 
 $iconLength = (Get-Item $OutputPath).Length
 if ($iconLength -lt 25000) { throw "Generated Turtle Transfer icon looks incomplete ($iconLength bytes)." }
-Write-Host "Generated Turtle Transfer icon from approved artwork: $OutputPath ($iconLength bytes)"
+Write-Host "Generated Turtle Transfer icon from FULL approved artwork: $OutputPath ($iconLength bytes)"
