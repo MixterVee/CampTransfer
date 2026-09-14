@@ -10,7 +10,7 @@ android {
         applicationId = "com.mixtervee.camptransferremote"
         minSdk = 26
         targetSdk = 32
-        versionCode = 8
+        versionCode = 9
         versionName = "0.4.0"
     }
 
