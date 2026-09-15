@@ -19,6 +19,7 @@ public sealed class TransferEngine
     public bool IsPaused { get; private set; }
     public bool IsRunning { get; private set; }
     public bool StoppedAfterCurrent { get; private set; }
+    public TransferItem? CurrentItem { get; private set; }
 
     public void Pause()
     {
@@ -46,19 +47,29 @@ public sealed class TransferEngine
 
     public void CancelCurrent() => _currentCts?.Cancel();
 
-    public async Task RunQueueAsync(IReadOnlyList<TransferItem> items, Action<TransferItem> itemChanged, CancellationToken stopQueueToken)
+    public async Task RunQueueAsync(IList<TransferItem> items, Action<TransferItem> itemChanged, CancellationToken stopQueueToken)
     {
         if (IsRunning) return;
         IsRunning = true;
         StoppedAfterCurrent = false;
         Resume();
 
+        // Keep track of items attempted during this run, but choose the next item
+        // from the live queue each time. That means Move Up/Down and header sorting
+        // can change the order of files that have not started yet.
+        var attempted = new HashSet<Guid>();
+
         try
         {
-            foreach (var item in items)
+            while (true)
             {
                 stopQueueToken.ThrowIfCancellationRequested();
-                if (item.Completed) continue;
+
+                var item = items.FirstOrDefault(i => !i.Completed && !attempted.Contains(i.Id));
+                if (item is null) break;
+
+                attempted.Add(item.Id);
+                CurrentItem = item;
 
                 _currentCts?.Dispose();
                 _currentCts = CancellationTokenSource.CreateLinkedTokenSource(stopQueueToken);
@@ -108,6 +119,10 @@ public sealed class TransferEngine
                     item.CurrentBytesPerSecond = 0;
                     itemChanged(item);
                 }
+                finally
+                {
+                    CurrentItem = null;
+                }
 
                 if (item.Completed && ShouldStopAfterCurrent())
                 {
@@ -118,6 +133,7 @@ public sealed class TransferEngine
         }
         finally
         {
+            CurrentItem = null;
             _currentCts?.Dispose();
             _currentCts = null;
             IsRunning = false;

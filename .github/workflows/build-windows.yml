@@ -1,4 +1,4 @@
-name: Build CampTransfer
+name: Build Turtle Transfer
 
 on:
   workflow_dispatch:
@@ -19,11 +19,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Generate polished Turtle Transfer icon
+        shell: pwsh
+        run: ./build/GenerateTurtleIcon.ps1 -OutputPath assets/TurtleTransfer.ico
+
       - name: Publish single EXE
         run: dotnet publish CampTransfer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CampTransfer-win-x64
-          path: publish/CampTransfer.exe
+          name: TurtleTransfer-win-x64
+          path: publish/TurtleTransfer.exe

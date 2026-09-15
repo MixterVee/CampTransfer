@@ -5,6 +5,7 @@ namespace CampTransferRelay;
 internal sealed class RelayForm : Form
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    // Keep the legacy value name so existing startup settings migrate automatically.
     private const string RunValueName = "CampTransferRelay";
 
     private readonly RelayServer _server = new();
@@ -22,11 +23,17 @@ internal sealed class RelayForm : Form
     {
         _startInTray = startInTray;
 
-        Text = "CampTransfer Relay";
+        Text = "Turtle Transfer Relay";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(520, 330);
         Size = new Size(620, 390);
         Font = new Font("Segoe UI", 10f);
+        try
+        {
+            var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (icon is not null) Icon = icon;
+        }
+        catch { }
 
         if (_startInTray)
         {
@@ -57,7 +64,7 @@ internal sealed class RelayForm : Form
 
         var title = new Label
         {
-            Text = "CampTransfer Relay",
+            Text = "Turtle Transfer Relay",
             Font = new Font("Segoe UI", 18f, FontStyle.Bold),
             AutoSize = true,
             Anchor = AnchorStyles.Left
@@ -67,13 +74,13 @@ internal sealed class RelayForm : Form
 
         AddRow(root, 1, "Relay status", out _statusValue);
         AddRow(root, 2, "Address", out _addressValue);
-        AddRow(root, 3, "CampTransfer", out _sourceValue);
+        AddRow(root, 3, "Turtle Transfer", out _sourceValue);
         AddRow(root, 4, "Last update", out _lastUpdateValue);
 
         var startupEnabled = IsStartupEnabled();
         _startWithWindows = new CheckBox
         {
-            Text = "Start CampTransfer Relay with Windows (in tray)",
+            Text = "Start Turtle Transfer Relay with Windows (in tray)",
             AutoSize = true,
             Checked = startupEnabled,
             Anchor = AnchorStyles.Left
@@ -81,14 +88,12 @@ internal sealed class RelayForm : Form
         _startWithWindows.CheckedChanged += (_, _) => SetStartupEnabled(_startWithWindows.Checked);
         root.Controls.Add(_startWithWindows, 1, 5);
 
-        // Migrate existing startup entries from older builds so the next Windows login
-        // launches the relay hidden in the notification area.
         if (startupEnabled)
             SetStartupEnabled(true);
 
         var help = new Label
         {
-            Text = "CampTransfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. When started with Windows it opens directly in the tray. Use the tray icon menu to exit completely.",
+            Text = "Turtle Transfer sends only its small monitor-status snapshot and authenticated remote commands here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. When started with Windows it opens directly in the tray. Use the tray icon menu to exit completely.",
             AutoSize = false,
             Dock = DockStyle.Fill,
             ForeColor = SystemColors.GrayText,
@@ -123,9 +128,7 @@ internal sealed class RelayForm : Form
         RefreshStatus();
 
         if (_startInTray)
-        {
             Shown += (_, _) => BeginInvoke(HideToTray);
-        }
 
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
@@ -141,18 +144,18 @@ internal sealed class RelayForm : Form
     private NotifyIcon BuildTrayIcon()
     {
         var menu = new ContextMenuStrip();
-        var openItem = new ToolStripMenuItem("Open CampTransfer Relay");
+        var openItem = new ToolStripMenuItem("Open Turtle Transfer Relay");
         openItem.Click += (_, _) => RestoreFromTray();
         menu.Items.Add(openItem);
         menu.Items.Add(new ToolStripSeparator());
-        var exitItem = new ToolStripMenuItem("Exit CampTransfer Relay");
+        var exitItem = new ToolStripMenuItem("Exit Turtle Transfer Relay");
         exitItem.Click += (_, _) => ExitApplication();
         menu.Items.Add(exitItem);
 
         var icon = new NotifyIcon
         {
-            Text = "CampTransfer Relay",
-            Icon = SystemIcons.Application,
+            Text = "Turtle Transfer Relay",
+            Icon = Icon ?? SystemIcons.Application,
             ContextMenuStrip = menu,
             Visible = true
         };
@@ -247,7 +250,7 @@ internal sealed class RelayForm : Form
         _addressValue.Text = $"{_server.DisplayAddress}:{RelayServer.Port}";
         _sourceValue.Text = status.HasSnapshot
             ? (string.IsNullOrWhiteSpace(status.LastSource) ? "Live" : "Live • " + status.LastSource)
-            : "Waiting for CampTransfer";
+            : "Waiting for Turtle Transfer";
 
         if (!status.LastReceivedUtc.HasValue || !status.Age.HasValue)
         {

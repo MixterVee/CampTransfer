@@ -14,15 +14,15 @@ internal static class MainWindowSafetyIntegration
     {
         private readonly MainForm _form;
         private readonly NotifyIcon _trayIcon;
-        private readonly CloseMessageFilter _closeFilter;
+        private readonly CloseWindowHook _closeHook;
         private bool _shownTrayNotice;
+        private bool _exitRequested;
 
         public Controller(MainForm form)
         {
             _form = form;
             _trayIcon = BuildTrayIcon();
-            _closeFilter = new CloseMessageFilter(form, HideToTray);
-            Application.AddMessageFilter(_closeFilter);
+            _closeHook = new CloseWindowHook(form, () => _exitRequested, HideToTray);
 
             _form.Shown += (_, _) =>
             {
@@ -32,7 +32,7 @@ internal static class MainWindowSafetyIntegration
 
             _form.FormClosed += (_, _) =>
             {
-                Application.RemoveMessageFilter(_closeFilter);
+                _closeHook.Dispose();
                 _trayIcon.Visible = false;
                 _trayIcon.Dispose();
             };
@@ -42,19 +42,19 @@ internal static class MainWindowSafetyIntegration
         {
             var menu = new ContextMenuStrip();
 
-            var openItem = new ToolStripMenuItem("Open CampTransfer");
+            var openItem = new ToolStripMenuItem("Open Turtle Transfer");
             openItem.Click += (_, _) => RestoreFromTray();
             menu.Items.Add(openItem);
             menu.Items.Add(new ToolStripSeparator());
 
-            var exitItem = new ToolStripMenuItem("Exit CampTransfer");
+            var exitItem = new ToolStripMenuItem("Exit Turtle Transfer");
             exitItem.Click += (_, _) => ExitApplication();
             menu.Items.Add(exitItem);
 
             var icon = new NotifyIcon
             {
-                Text = "CampTransfer",
-                Icon = SystemIcons.Application,
+                Text = "Turtle Transfer",
+                Icon = _form.Icon ?? SystemIcons.Application,
                 ContextMenuStrip = menu,
                 Visible = false
             };
@@ -72,8 +72,8 @@ internal static class MainWindowSafetyIntegration
 
             if (_shownTrayNotice) return;
             _shownTrayNotice = true;
-            _trayIcon.BalloonTipTitle = "CampTransfer is still running";
-            _trayIcon.BalloonTipText = "The window was hidden so transfers can continue. Double-click the tray icon to reopen CampTransfer.";
+            _trayIcon.BalloonTipTitle = "Turtle Transfer is still running";
+            _trayIcon.BalloonTipText = "The window was hidden so transfers can continue. Double-click the tray icon to reopen Turtle Transfer.";
             _trayIcon.BalloonTipIcon = ToolTipIcon.Info;
             _trayIcon.ShowBalloonTip(5000);
         }
@@ -99,7 +99,7 @@ internal static class MainWindowSafetyIntegration
             {
                 var answer = MessageBox.Show(
                     _form,
-                    "A transfer is currently active. Exiting will stop it, although CampTransfer can resume valid partial data the next time it starts.\n\nExit CampTransfer anyway?",
+                    "A transfer is currently active. Exiting will stop it, although Turtle Transfer can resume valid partial data the next time it starts.\n\nExit Turtle Transfer anyway?",
                     "Transfer in progress",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning,
@@ -107,7 +107,7 @@ internal static class MainWindowSafetyIntegration
                 if (answer != DialogResult.Yes) return;
             }
 
-            Application.RemoveMessageFilter(_closeFilter);
+            _exitRequested = true;
             _trayIcon.Visible = false;
             _form.Close();
         }
@@ -173,7 +173,7 @@ internal static class MainWindowSafetyIntegration
 
             var answer = MessageBox.Show(
                 _form,
-                $"CampTransfer found unfinished work from the previous session.\n\n{details}\n\nResume the previous transfer now?",
+                $"Turtle Transfer found unfinished work from the previous session.\n\n{details}\n\nResume the previous transfer now?",
                 "Resume previous transfer",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question,
@@ -253,32 +253,47 @@ internal static class MainWindowSafetyIntegration
         private sealed record ResumeCandidate(TransferItem Item, long ResumeBytes, long SourceLength, bool CleanupOnly);
     }
 
-    private sealed class CloseMessageFilter : IMessageFilter
+    /// <summary>
+    /// Intercepts WM_CLOSE before WinForms raises FormClosing. This is deliberately
+    /// lower-level than the previous SC_CLOSE message filter so the title-bar X,
+    /// Alt+F4 and shell close all reliably hide the window instead of allowing
+    /// MainForm's normal shutdown handler to cancel the active queue.
+    /// </summary>
+    private sealed class CloseWindowHook : NativeWindow, IDisposable
     {
-        private const int WmSysCommand = 0x0112;
-        private const int ScClose = 0xF060;
+        private const int WmClose = 0x0010;
+        private const int WmQueryEndSession = 0x0011;
+        private const int WmEndSession = 0x0016;
 
-        private readonly MainForm _form;
+        private readonly Func<bool> _exitRequested;
         private readonly Action _hideToTray;
+        private bool _windowsEnding;
 
-        public CloseMessageFilter(MainForm form, Action hideToTray)
+        public CloseWindowHook(Form form, Func<bool> exitRequested, Action hideToTray)
         {
-            _form = form;
+            _exitRequested = exitRequested;
             _hideToTray = hideToTray;
+            AssignHandle(form.Handle);
         }
 
-        public bool PreFilterMessage(ref Message m)
+        protected override void WndProc(ref Message m)
         {
-            if (_form.IsDisposed ||
-                m.HWnd != _form.Handle ||
-                m.Msg != WmSysCommand ||
-                (m.WParam.ToInt64() & 0xFFF0) != ScClose)
+            if (m.Msg == WmQueryEndSession || m.Msg == WmEndSession)
+                _windowsEnding = true;
+
+            if (m.Msg == WmClose && !_exitRequested() && !_windowsEnding)
             {
-                return false;
+                _hideToTray();
+                return;
             }
 
-            _hideToTray();
-            return true;
+            base.WndProc(ref m);
+        }
+
+        public void Dispose()
+        {
+            if (Handle != IntPtr.Zero)
+                ReleaseHandle();
         }
     }
 }

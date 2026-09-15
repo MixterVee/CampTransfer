@@ -11,7 +11,24 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Building CampTransfer for 64-bit Windows...
+where powershell >nul 2>nul
+if errorlevel 1 (
+    echo Windows PowerShell was not found.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo Preparing Turtle Transfer artwork...
+powershell -NoProfile -ExecutionPolicy Bypass -File build\GenerateTurtleIcon.ps1 -OutputPath assets\TurtleTransfer.ico
+if errorlevel 1 (
+    echo.
+    echo Icon generation failed.
+    pause
+    exit /b 1
+)
+
+echo Building Turtle Transfer for 64-bit Windows...
 dotnet publish CampTransfer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 if errorlevel 1 (
     echo.
@@ -22,5 +39,5 @@ if errorlevel 1 (
 
 echo.
 echo Build complete:
-echo %~dp0publish\CampTransfer.exe
-pause
+echo %~dp0publish\TurtleTransfer.exe
+ pause

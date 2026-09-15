@@ -367,23 +367,27 @@ public sealed class MainForm : Form
         };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
+        var added = new List<TransferItem>();
         var rootName = Path.GetFileName(dialog.SelectedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         foreach (var file in Directory.EnumerateFiles(dialog.SelectedPath, "*", SearchOption.AllDirectories))
         {
             var relative = Path.Combine(rootName, Path.GetRelativePath(dialog.SelectedPath, file));
-            AddFile(file, relative);
+            added.Add(AddFile(file, relative));
         }
+
+        OfferResumeForAddedItems(added);
     }
 
     private void AddPaths(IEnumerable<string> paths)
     {
+        var added = new List<TransferItem>();
         foreach (var path in paths)
         {
             try
             {
                 if (File.Exists(path))
                 {
-                    AddFile(path, Path.GetFileName(path));
+                    added.Add(AddFile(path, Path.GetFileName(path)));
                 }
                 else if (Directory.Exists(path))
                 {
@@ -391,7 +395,7 @@ public sealed class MainForm : Form
                     foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
                     {
                         var relative = Path.Combine(rootName, Path.GetRelativePath(path, file));
-                        AddFile(file, relative);
+                        added.Add(AddFile(file, relative));
                     }
                 }
             }
@@ -400,15 +404,17 @@ public sealed class MainForm : Form
                 MessageBox.Show(this, ex.Message, "Could not add item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
+
+        OfferResumeForAddedItems(added);
     }
 
-    private void AddFile(string path, string relativePath)
+    private TransferItem AddFile(string path, string relativePath)
     {
         var info = new FileInfo(path);
         var destination = PathHelpers.NormalizeDestinationPath(_destinationBox.Text);
         _destinationBox.Text = destination;
 
-        _queue.Add(new TransferItem
+        var item = new TransferItem
         {
             SourcePath = info.FullName,
             DestinationRoot = destination,
@@ -416,8 +422,41 @@ public sealed class MainForm : Form
             SizeBytes = info.Length,
             Operation = _operationBox.Text == "Move" ? "Move" : "Copy",
             Status = string.IsNullOrWhiteSpace(destination) ? "Destination needed" : "Queued"
-        });
+        };
+
+        if (!string.IsNullOrWhiteSpace(destination))
+            ResumeSupport.MarkResumeAvailable(item);
+
+        _queue.Add(item);
         RememberDestination(destination);
+        return item;
+    }
+
+    private void OfferResumeForAddedItems(IReadOnlyCollection<TransferItem> added)
+    {
+        var resumable = added.Where(i => i.Status == "Resume available").ToList();
+        if (resumable.Count == 0 || _engine.IsRunning) return;
+
+        string details;
+        if (resumable.Count == 1)
+        {
+            details = $"{resumable[0].FileName} can continue from {resumable[0].ProgressPercent:0.0}%.";
+        }
+        else
+        {
+            details = $"{resumable.Count} added files have valid partial data and can continue where they left off.";
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"Turtle Transfer found resumable partial data.\n\n{details}\n\nResume now?",
+            "Resume transfer",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1);
+
+        if (answer == DialogResult.Yes && _startButton.Enabled)
+            _startButton.PerformClick();
     }
 
     private void BrowseDestination()
@@ -471,9 +510,8 @@ public sealed class MainForm : Form
         operation = string.Equals(operation, "Move", StringComparison.OrdinalIgnoreCase) ? "Move" : "Copy";
         foreach (DataGridViewRow row in _grid.SelectedRows)
         {
-            if (row.DataBoundItem is not TransferItem item || item.Completed ||
-                item.Status is "Transferring" or "Paused" or "Resuming" ||
-                item.Status.StartsWith("Retrying", StringComparison.Ordinal))
+            if (row.DataBoundItem is not TransferItem item || item.Completed || item.SourceCleanupPending ||
+                item.Status.StartsWith("Deleting source", StringComparison.Ordinal))
                 continue;
 
             item.Operation = operation;
@@ -534,7 +572,7 @@ public sealed class MainForm : Form
 
     private void MoveSelected(int direction)
     {
-        if (_engine.IsRunning || _grid.SelectedRows.Count != 1) return;
+        if (_grid.SelectedRows.Count != 1) return;
         if (_grid.SelectedRows[0].DataBoundItem is not TransferItem item) return;
 
         var oldIndex = _queue.IndexOf(item);
@@ -580,13 +618,12 @@ public sealed class MainForm : Form
         _queueCts = new CancellationTokenSource();
         SetRunningUi(true);
 
-        var snapshot = _queue.ToList();
-        var workItems = snapshot.Where(i => !i.Completed).ToList();
+        var workItems = _queue.Where(i => !i.Completed).ToList();
         var queueStopped = false;
 
         try
         {
-            await _engine.RunQueueAsync(snapshot, OnItemChanged, _queueCts.Token);
+            await _engine.RunQueueAsync(_queue, OnItemChanged, _queueCts.Token);
         }
         catch (OperationCanceledException)
         {

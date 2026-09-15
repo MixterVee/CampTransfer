@@ -1,4 +1,4 @@
-name: Build CampTransfer Relay
+name: Build Turtle Transfer Relay
 
 on:
   workflow_dispatch:
@@ -19,11 +19,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Generate polished Turtle Transfer Relay icon
+        shell: pwsh
+        run: ./build/GenerateTurtleIcon.ps1 -OutputPath relay/CampTransferRelay/TurtleTransfer.ico
+
       - name: Publish relay EXE
         run: dotnet publish relay/CampTransferRelay/CampTransferRelay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o relay-publish
 
       - name: Upload relay artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CampTransfer-Relay-win-x64
-          path: relay-publish/CampTransferRelay.exe
+          name: TurtleTransfer-Relay-win-x64
+          path: relay-publish/TurtleTransferRelay.exe

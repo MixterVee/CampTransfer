@@ -1,4 +1,4 @@
-name: Build CampTransfer Remote Android
+name: Build Turtle Transfer Remote Android
 
 on:
   workflow_dispatch:
@@ -20,22 +20,81 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android 35 SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/bin/sdkmanager"
+          fi
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Rebuild verified Turtle Transfer launcher artwork
+        shell: bash
+        run: |
+          set -euo pipefail
+          RES="android/CampTransferRemote/app/src/main/res/mipmap-nodpi"
+          SRC="android/CampTransferRemote/icon-source"
+          mkdir -p "$RES"
+          rm -f "$RES/turtle_transfer_launcher.png" "$RES/turtle_transfer_launcher.webp"
+          cat "$SRC"/turtle.part*.b64 | tr -d '\r\n' | base64 --decode > "$RES/turtle_transfer_launcher.webp"
+          echo "a3e15931c644c35b1f20065a97a7a00cdf29a63653f8a5acd50ad53f42331cca  $RES/turtle_transfer_launcher.webp" | sha256sum -c -
+          python3 -m pip install --quiet pillow
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          p = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.webp')
+          with Image.open(p) as im:
+              im.load()
+              if im.size != (256, 256):
+                  raise SystemExit(f'Unexpected launcher size: {im.size}')
+              print('Launcher source fully decoded:', im.size, im.mode, p.stat().st_size, 'bytes')
+          PY
+
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
+
+      - name: Verify actual launcher inside APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          BADGING="$($AAPT dump badging "$APK")"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "application-icon-.*:'res/mipmap-nodpi-v4/turtle_transfer_launcher.webp'" || {
+            echo "APK launcher mapping is not the Turtle Transfer WebP artwork"
+            exit 1
+          }
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          import hashlib, io, zipfile
+          apk = Path('android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk')
+          expected = 'a3e15931c644c35b1f20065a97a7a00cdf29a63653f8a5acd50ad53f42331cca'
+          with zipfile.ZipFile(apk) as z:
+              matches = [n for n in z.namelist() if n.endswith('/turtle_transfer_launcher.webp') and '/mipmap-' in n]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one launcher WebP, found: {matches}')
+              data = z.read(matches[0])
+              actual = hashlib.sha256(data).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'APK launcher hash mismatch: {actual}')
+              with Image.open(io.BytesIO(data)) as im:
+                  im.load()
+                  if im.size != (256, 256):
+                      raise SystemExit(f'APK launcher decoded to wrong size: {im.size}')
+                  print('APK launcher fully decoded and verified:', matches[0], im.size, im.mode)
+          PY
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CampTransfer-Remote-Android
+          name: TurtleTransfer-Remote-Android
           path: android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk
