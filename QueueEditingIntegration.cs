@@ -13,12 +13,12 @@ internal static class QueueEditingIntegration
             return;
         }
 
-        MakeModeColumnEditable(grid);
+        MakeModeColumnEditable(grid, bindingSource);
         AddColumnSorting(grid, queue);
         AddRemoveAllButton(form, queue);
     }
 
-    private static void MakeModeColumnEditable(DataGridView grid)
+    private static void MakeModeColumnEditable(DataGridView grid, BindingSource bindingSource)
     {
         var existing = grid.Columns.Cast<DataGridViewColumn>()
             .FirstOrDefault(c => string.Equals(c.DataPropertyName, nameof(TransferItem.Operation), StringComparison.Ordinal));
@@ -44,8 +44,11 @@ internal static class QueueEditingIntegration
 
         // Keep every other queue field read-only; only Mode can be changed inline.
         grid.ReadOnly = false;
+        grid.EditMode = DataGridViewEditMode.EditOnEnter;
         foreach (DataGridViewColumn column in grid.Columns)
             column.ReadOnly = !ReferenceEquals(column, modeColumn);
+
+        var modeEditActive = false;
 
         grid.CellBeginEdit += (_, e) =>
         {
@@ -56,7 +59,15 @@ internal static class QueueEditingIntegration
             {
                 e.Cancel = true;
                 System.Media.SystemSounds.Beep.Play();
+                return;
             }
+
+            // MainForm refreshes the current row several times per second while a
+            // transfer is active. Those refreshes were resetting the ComboBox editor
+            // back to its old value while the user was trying to choose Copy/Move.
+            // Suppress BindingSource notifications only for the brief edit session.
+            modeEditActive = true;
+            bindingSource.RaiseListChangedEvents = false;
         };
 
         grid.CurrentCellDirtyStateChanged += (_, _) =>
@@ -65,10 +76,26 @@ internal static class QueueEditingIntegration
                 grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
         };
 
+        grid.CellEndEdit += (_, e) =>
+        {
+            if (!modeEditActive || e.ColumnIndex != modeColumn.Index) return;
+
+            modeEditActive = false;
+            bindingSource.RaiseListChangedEvents = true;
+            bindingSource.EndEdit();
+            bindingSource.ResetCurrentItem();
+        };
+
         grid.DataError += (_, e) =>
         {
             if (e.ColumnIndex == modeColumn.Index)
                 e.ThrowException = false;
+        };
+
+        grid.Disposed += (_, _) =>
+        {
+            if (modeEditActive)
+                bindingSource.RaiseListChangedEvents = true;
         };
     }
 
