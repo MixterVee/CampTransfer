@@ -41,7 +41,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import struct
-          p = Path('android/CampTransferRemote/app/src/main/res/drawable-nodpi/turtle_transfer_launcher.png')
+          p = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png')
           data = p.read_bytes()
           if data[:8] != b'\x89PNG\r\n\x1a\n':
               raise SystemExit('Launcher icon is not a valid PNG')
@@ -53,6 +53,32 @@ jobs:
 
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
+
+      - name: Verify APK launcher icon mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          BADGING="$($AAPT dump badging "$APK")"
+          echo "$BADGING" | grep -q "turtle_transfer_launcher" || {
+            echo "APK manifest is not using the Turtle Transfer launcher icon"
+            exit 1
+          }
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+          apk = Path('android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk')
+          src = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png').read_bytes()
+          expected = hashlib.sha256(src).hexdigest()
+          with zipfile.ZipFile(apk) as z:
+              matches = [n for n in z.namelist() if n.endswith('/turtle_transfer_launcher.png') and '/mipmap-' in n]
+              if not matches:
+                  raise SystemExit('No Turtle Transfer mipmap launcher PNG found inside APK')
+              if not any(hashlib.sha256(z.read(n)).hexdigest() == expected for n in matches):
+                  raise SystemExit('APK launcher PNG does not match the approved artwork')
+              print('APK launcher icon verified:', ', '.join(matches))
+          PY
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
