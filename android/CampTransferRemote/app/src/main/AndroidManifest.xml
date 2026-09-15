@@ -14,8 +14,10 @@
         android:theme="@style/Theme.CampTransferRemote"
         android:usesCleartextTraffic="true">
 
+        <!-- MainActivityV30 is the proven-stable activity. Keep branding in the
+             manifest/resources rather than wrapping the activity at runtime. -->
         <activity
-            android:name=".MainActivityV40"
+            android:name=".MainActivityV30"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
