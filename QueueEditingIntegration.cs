@@ -14,6 +14,7 @@ internal static class QueueEditingIntegration
         }
 
         MakeModeColumnEditable(grid);
+        AddColumnSorting(grid, queue);
         AddRemoveAllButton(form, queue);
     }
 
@@ -36,7 +37,7 @@ internal static class QueueEditingIntegration
             Width = Math.Max(78, width),
             DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
             FlatStyle = FlatStyle.Standard,
-            SortMode = DataGridViewColumnSortMode.Automatic
+            SortMode = DataGridViewColumnSortMode.Programmatic
         };
         modeColumn.Items.AddRange("Copy", "Move");
         grid.Columns.Insert(index, modeColumn);
@@ -73,11 +74,100 @@ internal static class QueueEditingIntegration
 
     private static bool CanChangeMode(TransferItem item)
     {
-        if (item.Completed || item.SourceCleanupPending || item.ProgressPercent > 0.001)
+        // Copy/Move only changes what happens after the destination file is complete,
+        // so it is safe to change even while data is transferring or a resumable
+        // partial exists. Once source deletion has started, however, it is too late.
+        if (item.Completed || item.SourceCleanupPending)
             return false;
 
-        return item.Status is not "Transferring" and not "Paused" and not "Resuming" and not "Deleting source" &&
-               !item.Status.StartsWith("Retrying", StringComparison.Ordinal);
+        return !item.Status.StartsWith("Deleting source", StringComparison.Ordinal);
+    }
+
+    private static void AddColumnSorting(DataGridView grid, BindingList<TransferItem> queue)
+    {
+        foreach (DataGridViewColumn column in grid.Columns)
+            column.SortMode = DataGridViewColumnSortMode.Programmatic;
+
+        string? sortedProperty = null;
+        var ascending = true;
+
+        grid.ColumnHeaderMouseClick += (_, e) =>
+        {
+            if (e.ColumnIndex < 0 || e.ColumnIndex >= grid.Columns.Count) return;
+
+            var column = grid.Columns[e.ColumnIndex];
+            var property = column.DataPropertyName;
+            if (string.IsNullOrWhiteSpace(property)) return;
+
+            if (string.Equals(sortedProperty, property, StringComparison.Ordinal))
+                ascending = !ascending;
+            else
+            {
+                sortedProperty = property;
+                ascending = true;
+            }
+
+            var selectedIds = grid.SelectedRows
+                .Cast<DataGridViewRow>()
+                .Select(r => r.DataBoundItem as TransferItem)
+                .Where(i => i is not null)
+                .Select(i => i!.Id)
+                .ToHashSet();
+
+            IEnumerable<TransferItem> ordered = property switch
+            {
+                nameof(TransferItem.FileName) => ascending
+                    ? queue.OrderBy(i => i.FileName, StringComparer.OrdinalIgnoreCase)
+                    : queue.OrderByDescending(i => i.FileName, StringComparer.OrdinalIgnoreCase),
+                nameof(TransferItem.Operation) => ascending
+                    ? queue.OrderBy(i => i.Operation, StringComparer.OrdinalIgnoreCase)
+                    : queue.OrderByDescending(i => i.Operation, StringComparer.OrdinalIgnoreCase),
+                nameof(TransferItem.DestinationDisplay) => ascending
+                    ? queue.OrderBy(i => i.DestinationDisplay, StringComparer.OrdinalIgnoreCase)
+                    : queue.OrderByDescending(i => i.DestinationDisplay, StringComparer.OrdinalIgnoreCase),
+                nameof(TransferItem.SizeText) => ascending
+                    ? queue.OrderBy(i => i.SizeBytes)
+                    : queue.OrderByDescending(i => i.SizeBytes),
+                nameof(TransferItem.ProgressText) => ascending
+                    ? queue.OrderBy(i => i.ProgressPercent)
+                    : queue.OrderByDescending(i => i.ProgressPercent),
+                nameof(TransferItem.Speed) => ascending
+                    ? queue.OrderBy(i => i.CurrentBytesPerSecond)
+                    : queue.OrderByDescending(i => i.CurrentBytesPerSecond),
+                nameof(TransferItem.Eta) => ascending
+                    ? queue.OrderBy(i => i.Eta, StringComparer.OrdinalIgnoreCase)
+                    : queue.OrderByDescending(i => i.Eta, StringComparer.OrdinalIgnoreCase),
+                nameof(TransferItem.Status) => ascending
+                    ? queue.OrderBy(i => i.Status, StringComparer.OrdinalIgnoreCase)
+                    : queue.OrderByDescending(i => i.Status, StringComparer.OrdinalIgnoreCase),
+                _ => queue
+            };
+
+            var sorted = ordered.ToList();
+            queue.RaiseListChangedEvents = false;
+            try
+            {
+                queue.Clear();
+                foreach (var item in sorted)
+                    queue.Add(item);
+            }
+            finally
+            {
+                queue.RaiseListChangedEvents = true;
+                queue.ResetBindings();
+            }
+
+            foreach (DataGridViewColumn other in grid.Columns)
+                other.HeaderCell.SortGlyphDirection = SortOrder.None;
+            column.HeaderCell.SortGlyphDirection = ascending ? SortOrder.Ascending : SortOrder.Descending;
+
+            grid.ClearSelection();
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (row.DataBoundItem is TransferItem item && selectedIds.Contains(item.Id))
+                    row.Selected = true;
+            }
+        };
     }
 
     private static void AddRemoveAllButton(MainForm form, BindingList<TransferItem> queue)
@@ -108,7 +198,7 @@ internal static class QueueEditingIntegration
             {
                 MessageBox.Show(form,
                     "Remove All is unavailable while a transfer is active.",
-                    "CampTransfer",
+                    "Turtle Transfer",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
                 return;
