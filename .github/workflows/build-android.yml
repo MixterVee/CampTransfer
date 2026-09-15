@@ -35,49 +35,62 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Verify checked-in Turtle Transfer launcher icon
+      - name: Rebuild verified Turtle Transfer launcher artwork
         shell: bash
         run: |
+          set -euo pipefail
+          RES="android/CampTransferRemote/app/src/main/res/mipmap-nodpi"
+          SRC="android/CampTransferRemote/icon-source"
+          mkdir -p "$RES"
+          rm -f "$RES/turtle_transfer_launcher.png" "$RES/turtle_transfer_launcher.webp"
+          cat "$SRC"/turtle.part*.b64 | tr -d '\r\n' | base64 --decode > "$RES/turtle_transfer_launcher.webp"
+          echo "a3e15931c644c35b1f20065a97a7a00cdf29a63653f8a5acd50ad53f42331cca  $RES/turtle_transfer_launcher.webp" | sha256sum -c -
+          python3 -m pip install --quiet pillow
           python3 - <<'PY'
+          from PIL import Image
           from pathlib import Path
-          import struct
-          p = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png')
-          data = p.read_bytes()
-          if data[:8] != b'\x89PNG\r\n\x1a\n':
-              raise SystemExit('Launcher icon is not a valid PNG')
-          width, height = struct.unpack('>II', data[16:24])
-          if width < 128 or height < 128:
-              raise SystemExit(f'Launcher icon too small: {width}x{height}')
-          print(f'Using checked-in Turtle Transfer launcher artwork: {width}x{height}, {len(data)} bytes')
+          p = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.webp')
+          with Image.open(p) as im:
+              im.load()
+              if im.size != (256, 256):
+                  raise SystemExit(f'Unexpected launcher size: {im.size}')
+              print('Launcher source fully decoded:', im.size, im.mode, p.stat().st_size, 'bytes')
           PY
 
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
 
-      - name: Verify APK launcher icon mapping
+      - name: Verify actual launcher inside APK
         shell: bash
         run: |
           set -euo pipefail
           APK="android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           BADGING="$($AAPT dump badging "$APK")"
-          echo "$BADGING" | grep -q "turtle_transfer_launcher" || {
-            echo "APK manifest is not using the Turtle Transfer launcher icon"
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "application-icon-.*:'res/mipmap-nodpi-v4/turtle_transfer_launcher.webp'" || {
+            echo "APK launcher mapping is not the Turtle Transfer WebP artwork"
             exit 1
           }
           python3 - <<'PY'
+          from PIL import Image
           from pathlib import Path
-          import hashlib, zipfile
+          import hashlib, io, zipfile
           apk = Path('android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk')
-          src = Path('android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png').read_bytes()
-          expected = hashlib.sha256(src).hexdigest()
+          expected = 'a3e15931c644c35b1f20065a97a7a00cdf29a63653f8a5acd50ad53f42331cca'
           with zipfile.ZipFile(apk) as z:
-              matches = [n for n in z.namelist() if n.endswith('/turtle_transfer_launcher.png') and '/mipmap-' in n]
-              if not matches:
-                  raise SystemExit('No Turtle Transfer mipmap launcher PNG found inside APK')
-              if not any(hashlib.sha256(z.read(n)).hexdigest() == expected for n in matches):
-                  raise SystemExit('APK launcher PNG does not match the approved artwork')
-              print('APK launcher icon verified:', ', '.join(matches))
+              matches = [n for n in z.namelist() if n.endswith('/turtle_transfer_launcher.webp') and '/mipmap-' in n]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one launcher WebP, found: {matches}')
+              data = z.read(matches[0])
+              actual = hashlib.sha256(data).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'APK launcher hash mismatch: {actual}')
+              with Image.open(io.BytesIO(data)) as im:
+                  im.load()
+                  if im.size != (256, 256):
+                      raise SystemExit(f'APK launcher decoded to wrong size: {im.size}')
+                  print('APK launcher fully decoded and verified:', matches[0], im.size, im.mode)
           PY
 
       - name: Upload APK
