@@ -20,102 +20,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android 35 SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/bin/sdkmanager"
+          fi
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Rebuild exact Turtle Transfer launcher icon
+      - name: Verify checked-in Turtle Transfer launcher icon
         shell: bash
         run: |
-          set -euo pipefail
-          ICON_DIR="android/CampTransferRemote/app/src/main/res/drawable-nodpi"
-          ICON_OUT="$ICON_DIR/turtle_transfer_launcher.png"
-          mkdir -p "$ICON_DIR"
-
-          # Remove old launcher mappings only. Keep ic_transfer.xml because the
-          # foreground-service notification still uses that resource.
-          rm -rf android/CampTransferRemote/app/src/main/res/mipmap-anydpi
-          rm -rf android/CampTransferRemote/app/src/main/res/mipmap-anydpi-v26
-          rm -f android/CampTransferRemote/app/src/main/res/drawable/ic_transfer_background.xml
-          rm -f android/CampTransferRemote/app/src/main/res/drawable/ic_transfer_foreground.xml
-          rm -f "$ICON_OUT"
-
-          # Same deterministic direct-PNG approach that fixed EAVdrop:
-          # reconstruct the approved artwork, validate it, and let the manifest
-          # point straight at that exact drawable.
           python3 - <<'PY'
           from pathlib import Path
-          import base64, struct, zlib
-
-          src = Path('build/turtle-icon/source256-full.b64')
-          out = Path('android/CampTransferRemote/app/src/main/res/drawable-nodpi/turtle_transfer_launcher.png')
-          raw = ''.join(src.read_text(encoding='utf-8').split())
-          data = base64.b64decode(raw, validate=True)
-
+          import struct
+          p = Path('android/CampTransferRemote/app/src/main/res/drawable-nodpi/turtle_transfer_launcher.png')
+          data = p.read_bytes()
           if data[:8] != b'\x89PNG\r\n\x1a\n':
-              raise SystemExit('Launcher source did not decode to a PNG')
-
-          pos = 8
-          saw_ihdr = False
-          saw_iend = False
-          while pos + 12 <= len(data):
-              length = struct.unpack('>I', data[pos:pos+4])[0]
-              ctype = data[pos+4:pos+8]
-              end = pos + 12 + length
-              if end > len(data):
-                  raise SystemExit(f'Truncated PNG chunk {ctype!r}')
-              chunk = data[pos+8:pos+8+length]
-              stored_crc = struct.unpack('>I', data[pos+8+length:pos+12+length])[0]
-              calc_crc = zlib.crc32(ctype)
-              calc_crc = zlib.crc32(chunk, calc_crc) & 0xffffffff
-              if stored_crc != calc_crc:
-                  raise SystemExit(f'Bad PNG CRC in chunk {ctype!r}')
-              if ctype == b'IHDR':
-                  saw_ihdr = True
-                  width, height = struct.unpack('>II', chunk[:8])
-                  if width < 64 or height < 64:
-                      raise SystemExit(f'Launcher icon too small: {width}x{height}')
-              if ctype == b'IEND':
-                  saw_iend = True
-                  pos = end
-                  break
-              pos = end
-
-          if not (saw_ihdr and saw_iend) or pos != len(data):
-              raise SystemExit('Invalid or incomplete PNG launcher icon')
-
-          out.write_bytes(data)
-          print(f'Launcher icon verified: {width}x{height}, {len(data)} bytes')
+              raise SystemExit('Launcher icon is not a valid PNG')
+          width, height = struct.unpack('>II', data[16:24])
+          if width < 128 or height < 128:
+              raise SystemExit(f'Launcher icon too small: {width}x{height}')
+          print(f'Using checked-in Turtle Transfer launcher artwork: {width}x{height}, {len(data)} bytes')
           PY
 
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
-
-      - name: Verify launcher artwork inside APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk"
-          unzip -p "$APK" res/drawable-nodpi-v4/turtle_transfer_launcher.png > /tmp/turtle_transfer_launcher.png
-          python3 - <<'PY'
-          from pathlib import Path
-          import struct
-          p = Path('/tmp/turtle_transfer_launcher.png')
-          data = p.read_bytes()
-          if data[:8] != b'\x89PNG\r\n\x1a\n':
-              raise SystemExit('APK launcher resource is not a valid PNG')
-          width, height = struct.unpack('>II', data[16:24])
-          if width != 256 or height != 256:
-              raise SystemExit(f'Unexpected launcher size in APK: {width}x{height}')
-          print(f'APK contains verified Turtle Transfer launcher artwork: {width}x{height}, {len(data)} bytes')
-          PY
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
