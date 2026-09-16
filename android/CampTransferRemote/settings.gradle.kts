@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CampTransferRemote"
+rootProject.name = "TurtleTransferRemote"
 include(":app")
