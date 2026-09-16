@@ -5,6 +5,7 @@ namespace CampTransferRelay;
 internal sealed class RelayForm : Form
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    // Keep the legacy value name so existing startup settings migrate automatically.
     private const string RunValueName = "CampTransferRelay";
 
     private readonly RelayServer _server = new();
@@ -27,6 +28,12 @@ internal sealed class RelayForm : Form
         MinimumSize = new Size(520, 330);
         Size = new Size(620, 390);
         Font = new Font("Segoe UI", 10f);
+        try
+        {
+            var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (icon is not null) Icon = icon;
+        }
+        catch { }
 
         if (_startInTray)
         {
@@ -81,14 +88,12 @@ internal sealed class RelayForm : Form
         _startWithWindows.CheckedChanged += (_, _) => SetStartupEnabled(_startWithWindows.Checked);
         root.Controls.Add(_startWithWindows, 1, 5);
 
-        // Migrate existing startup entries from older builds so the next Windows login
-        // launches the relay hidden in the notification area.
         if (startupEnabled)
             SetStartupEnabled(true);
 
         var help = new Label
         {
-            Text = "Turtle Transfer sends only its small monitor-status snapshot here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. When started with Windows it opens directly in the tray. Use the tray icon menu to exit completely.",
+            Text = "Turtle Transfer sends only its small monitor-status snapshot and authenticated remote commands here; no transferred file data passes through the relay. You can close this window with X — the relay will keep running in the system tray. When started with Windows it opens directly in the tray. Use the tray icon menu to exit completely.",
             AutoSize = false,
             Dock = DockStyle.Fill,
             ForeColor = SystemColors.GrayText,
@@ -123,9 +128,7 @@ internal sealed class RelayForm : Form
         RefreshStatus();
 
         if (_startInTray)
-        {
             Shown += (_, _) => BeginInvoke(HideToTray);
-        }
 
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
@@ -152,7 +155,7 @@ internal sealed class RelayForm : Form
         var icon = new NotifyIcon
         {
             Text = "Turtle Transfer Relay",
-            Icon = SystemIcons.Application,
+            Icon = Icon ?? SystemIcons.Application,
             ContextMenuStrip = menu,
             Visible = true
         };

@@ -28,6 +28,11 @@ jobs:
       - name: Install Android 35 SDK
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Restore approved Turtle Transfer launcher artwork
+        run: |
+          base64 -d build/turtle-icon/source256-full.b64 > android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png
+          cp android/CampTransferRemote/app/src/main/res/mipmap-nodpi/turtle_transfer_launcher.png android/CampTransferRemote/app/src/main/res/drawable-nodpi/turtle_transfer_launcher.png
+
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -37,10 +42,10 @@ jobs:
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
 
       - name: Name APK
-        run: cp android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk TurtleTransfer-Remote-v0.3.2.apk
+        run: cp android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk TurtleTransfer-Remote-v0.3.3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: TurtleTransfer-Remote-Android
-          path: TurtleTransfer-Remote-v0.3.2.apk
+          path: TurtleTransfer-Remote-v0.3.3.apk
