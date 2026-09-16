@@ -33,7 +33,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "CampTransfer";
+        Text = "Turtle Transfer";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(900, 520);
         Size = new Size(1180, 650);
@@ -41,7 +41,7 @@ public sealed class MainForm : Form
         AllowDrop = true;
 
         _notifyIcon.Icon = SystemIcons.Application;
-        _notifyIcon.Text = "CampTransfer";
+        _notifyIcon.Text = "Turtle Transfer";
         _notificationHideTimer.Tick += (_, _) =>
         {
             _notificationHideTimer.Stop();
@@ -558,7 +558,7 @@ public sealed class MainForm : Form
         if (_engine.IsRunning) return;
         if (_queue.Count == 0)
         {
-            MessageBox.Show(this, "Add at least one file first.", "CampTransfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Add at least one file first.", "Turtle Transfer", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         if (!SpeedParser.TryParse(_speedBox.Text, out _))
@@ -742,7 +742,7 @@ public sealed class MainForm : Form
     {
         if (_closing) return;
 
-        _notifyIcon.BalloonTipTitle = "CampTransfer";
+        _notifyIcon.BalloonTipTitle = "Turtle Transfer";
         _notifyIcon.BalloonTipText = transferredCount == 1
             ? "Transfer completed."
             : $"All {transferredCount} transfers completed.";
