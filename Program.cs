@@ -11,8 +11,8 @@ internal static class Program
         if (!createdNew)
         {
             MessageBox.Show(
-                "CampTransfer is already running. Check the Windows system tray to reopen it.",
-                "CampTransfer",
+                "Turtle Transfer is already running. Check the Windows system tray to reopen it.",
+                "Turtle Transfer",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             return;
