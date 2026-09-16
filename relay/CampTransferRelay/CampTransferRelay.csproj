@@ -7,5 +7,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>TurtleTransferRelay</AssemblyName>
     <RootNamespace>CampTransferRelay</RootNamespace>
+    <ApplicationIcon>TurtleTransfer.ico</ApplicationIcon>
+    <Product>Turtle Transfer Relay</Product>
+    <Title>Turtle Transfer Relay</Title>
+    <Description>Home relay for Turtle Transfer monitoring and remote control.</Description>
   </PropertyGroup>
 </Project>
