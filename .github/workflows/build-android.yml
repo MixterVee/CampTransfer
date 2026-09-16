@@ -1,4 +1,4 @@
-name: Build CampTransfer Remote Android
+name: Build Turtle Transfer Remote Android
 
 on:
   workflow_dispatch:
@@ -34,8 +34,11 @@ jobs:
       - name: Build debug APK
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
 
+      - name: Name APK
+        run: cp android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk TurtleTransfer-Remote-v0.3.2.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: CampTransfer-Remote-Android
-          path: android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk
+          name: TurtleTransfer-Remote-Android
+          path: TurtleTransfer-Remote-v0.3.2.apk
