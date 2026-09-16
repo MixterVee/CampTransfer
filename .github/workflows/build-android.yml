@@ -42,10 +42,10 @@ jobs:
         run: gradle -p android/CampTransferRemote :app:assembleDebug --no-daemon
 
       - name: Name APK
-        run: cp android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk TurtleTransfer-Remote-v0.3.3.apk
+        run: cp android/CampTransferRemote/app/build/outputs/apk/debug/app-debug.apk TurtleTransfer-Remote-v0.3.4.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: TurtleTransfer-Remote-Android
-          path: TurtleTransfer-Remote-v0.3.3.apk
+          path: TurtleTransfer-Remote-v0.3.4.apk

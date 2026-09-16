@@ -25,6 +25,7 @@ internal static class Program
         QueueEditingIntegration.Attach(form);
         RemoteControlIntegration.Attach(form);
         RemoteMonitorIntegration.Attach(form);
+        RemoteFirewallIntegration.Ensure(form);
         RemoteRelayIntegration.Attach(form);
         MainWindowSafetyIntegration.Attach(form);
         TurtleBranding.Apply(form);
