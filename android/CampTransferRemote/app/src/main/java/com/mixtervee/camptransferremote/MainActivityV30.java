@@ -105,7 +105,7 @@ public class MainActivityV30 extends MainActivityV20 {
         card.addView(eyebrow);
 
         TextView helper = label(
-                "Pair once, then control CampTransfer automatically over direct Wi-Fi or the home relay.",
+                "Pair once, then control Turtle Transfer automatically over direct Wi-Fi or the home relay.",
                 13, false, secondaryTextColor);
         helper.setPadding(0, dp(5), 0, dp(12));
         card.addView(helper);
@@ -198,7 +198,7 @@ public class MainActivityV30 extends MainActivityV20 {
             if (isPaired()) {
                 prefsV30.edit().remove(PREF_CONTROL_TOKEN).apply();
                 refreshPairingUi();
-                setCommandStatus("Enter the current 6-digit code shown by Pair Remote… in CampTransfer.");
+                setCommandStatus("Enter the current 6-digit code shown by Pair Remote… in Turtle Transfer.");
             } else {
                 pairControls();
             }
@@ -227,7 +227,7 @@ public class MainActivityV30 extends MainActivityV20 {
     private void pairControls() {
         String code = pairCodeEdit.getText().toString().trim();
         if (code.length() != 6) {
-            Toast.makeText(this, "Enter the 6-digit code shown in CampTransfer.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Enter the 6-digit code shown in Turtle Transfer.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -275,14 +275,14 @@ public class MainActivityV30 extends MainActivityV20 {
                     if ("setUploadLimit".equals(action) && result.ok)
                         uploadSelectionPending = false;
                     setCommandStatus(result.message);
-                    Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, branded(result.message), Toast.LENGTH_SHORT).show();
                     pollControlState();
                 });
             } catch (SecurityException ex) {
                 prefsV30.edit().remove(PREF_CONTROL_TOKEN).apply();
                 mainHandler.post(() -> {
                     refreshPairingUi();
-                    setCommandStatus("Pairing expired. Enter the current code from CampTransfer.");
+                    setCommandStatus("Pairing expired. Enter the current code from Turtle Transfer.");
                 });
             } catch (Exception ex) {
                 mainHandler.post(() -> {
@@ -352,7 +352,7 @@ public class MainActivityV30 extends MainActivityV20 {
         }
 
         if (!controlAvailable) {
-            pairStatusText.setText("Remote control is not available on the connected CampTransfer build.");
+            pairStatusText.setText("Remote control is not available on the connected Turtle Transfer build.");
             setControlsEnabled(false);
             return;
         }
@@ -372,7 +372,7 @@ public class MainActivityV30 extends MainActivityV20 {
         boolean paired = isPaired();
         pairStatusText.setText(paired
                 ? "Paired • controls follow the same automatic direct/relay connection"
-                : "Not paired • click Pair Remote… in CampTransfer to get the code");
+                : "Not paired • click Pair Remote… in Turtle Transfer to get the code");
         pairCodeEdit.setVisibility(paired ? View.GONE : View.VISIBLE);
         pairButton.setText(paired ? "Re-pair" : "Pair");
         if (paired) pairCodeEdit.setText("");
@@ -394,7 +394,11 @@ public class MainActivityV30 extends MainActivityV20 {
     }
 
     private void setCommandStatus(String text) {
-        if (commandStatusText != null) commandStatusText.setText(text == null ? "" : text);
+        if (commandStatusText != null) commandStatusText.setText(branded(text));
+    }
+
+    private String branded(String text) {
+        return text == null ? "" : text.replace("CampTransfer", "Turtle Transfer");
     }
 
     private LinearLayout findRootLayout() {
@@ -449,6 +453,6 @@ public class MainActivityV30 extends MainActivityV20 {
         String message = ex.getMessage();
         if ((message == null || message.trim().isEmpty()) && ex.getCause() != null)
             message = ex.getCause().getMessage();
-        return message == null || message.trim().isEmpty() ? "Command failed" : message;
+        return message == null || message.trim().isEmpty() ? "Command failed" : branded(message);
     }
 }
