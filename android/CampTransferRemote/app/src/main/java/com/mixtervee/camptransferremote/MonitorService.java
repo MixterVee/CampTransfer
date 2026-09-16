@@ -158,7 +158,7 @@ public class MonitorService extends Service {
     }
 
     private Notification buildNotification(String title, String text, int progress, boolean ongoing) {
-        Intent openIntent = new Intent(this, MainActivityV31.class);
+        Intent openIntent = new Intent(this, MainActivityV32.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this,
