@@ -21,8 +21,8 @@ internal static class Program
         var form = new MainForm();
         BrandingIntegration.Apply(form);
         StartButtonAccent.Apply(form);
-        DestinationQueueSync.Attach(form);
         QueueEditingIntegration.Attach(form);
+        QueueDestinationEditingIntegration.Attach(form);
         RemoteControlIntegration.Attach(form);
         RemoteMonitorIntegration.Attach(form);
         RemoteFirewallIntegration.Ensure(form);
