@@ -8,6 +8,10 @@
     <AssemblyName>TurtleTransfer</AssemblyName>
     <RootNamespace>CampTransfer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\TurtleTransfer.ico</ApplicationIcon>
+    <Product>Turtle Transfer</Product>
+    <Title>Turtle Transfer</Title>
+    <Description>Controlled file transfers at your pace.</Description>
   </PropertyGroup>
 
   <ItemGroup>
