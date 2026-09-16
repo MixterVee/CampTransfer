@@ -19,6 +19,7 @@ internal static class Program
         }
 
         var form = new MainForm();
+        BrandingIntegration.Apply(form);
         StartButtonAccent.Apply(form);
         DestinationQueueSync.Attach(form);
         QueueEditingIntegration.Attach(form);
