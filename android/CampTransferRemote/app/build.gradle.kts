@@ -7,11 +7,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.mixtervee.camptransferremote"
+        applicationId = "com.mixtervee.turtletransferremote"
         minSdk = 26
         targetSdk = 32
-        versionCode = 7
-        versionName = "0.3.1"
+        versionCode = 8
+        versionName = "0.3.2"
     }
 
     buildTypes {

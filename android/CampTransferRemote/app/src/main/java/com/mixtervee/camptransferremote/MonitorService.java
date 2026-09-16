@@ -18,7 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class MonitorService extends Service {
-    private static final String CHANNEL_ID = "camptransfer_monitor";
+    private static final String CHANNEL_ID = "turtletransfer_monitor";
     private static final int FOREGROUND_ID = 45827;
     private static final int EVENT_ID = 45828;
 
@@ -32,8 +32,8 @@ public class MonitorService extends Service {
         prefs = getSharedPreferences(MainActivityV20.PREFS, MODE_PRIVATE);
         createNotificationChannel();
         startForeground(FOREGROUND_ID, buildNotification(
-                "CampTransfer Remote",
-                "Connecting to CampTransfer…",
+                "Turtle Transfer Remote",
+                "Connecting to Turtle Transfer…",
                 -1,
                 true));
     }
@@ -74,10 +74,10 @@ public class MonitorService extends Service {
             updateFromStatus(result.status, result.viaRelay);
         } catch (Exception ex) {
             String detail = noRelay
-                    ? "Waiting for CampTransfer • " + direct
-                    : "Waiting for CampTransfer • direct + relay";
+                    ? "Waiting for Turtle Transfer • " + direct
+                    : "Waiting for Turtle Transfer • direct + relay";
             Notification waiting = buildNotification(
-                    "CampTransfer Remote",
+                    "Turtle Transfer Remote",
                     detail,
                     -1,
                     true);
@@ -87,7 +87,7 @@ public class MonitorService extends Service {
 
     private void updateFromStatus(JSONObject status, boolean viaRelay) {
         int filesLeft = status.optInt("filesLeft", 0);
-        String pcName = status.optString("pcName", "CampTransfer");
+        String pcName = status.optString("pcName", "Turtle Transfer");
         String state = status.optString("state", "Ready");
         String whenFinished = status.optString("whenFinished", "Do nothing");
         JSONObject active = status.optJSONObject("active");
@@ -104,7 +104,7 @@ public class MonitorService extends Service {
 
         if (filesLeft == 0) {
             Notification complete = buildNotification(
-                    "CampTransfer queue complete",
+                    "Turtle Transfer queue complete",
                     "Finished on " + pcName + ("Do nothing".equals(whenFinished) ? "" : " • " + whenFinished),
                     100,
                     false);
@@ -123,7 +123,7 @@ public class MonitorService extends Service {
         int progress = -1;
 
         if (active == null) {
-            title = "CampTransfer • " + filesLeft + (filesLeft == 1 ? " file left" : " files left");
+            title = "Turtle Transfer • " + filesLeft + (filesLeft == 1 ? " file left" : " files left");
             detail = state;
         } else {
             String file = active.optString("fileName", "Transfer");
@@ -158,7 +158,7 @@ public class MonitorService extends Service {
     }
 
     private Notification buildNotification(String title, String text, int progress, boolean ongoing) {
-        Intent openIntent = new Intent(this, MainActivityV20.class);
+        Intent openIntent = new Intent(this, MainActivityV31.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this,
@@ -192,9 +192,9 @@ public class MonitorService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "CampTransfer progress",
+                "Turtle Transfer progress",
                 NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Live CampTransfer progress and completion status");
+        channel.setDescription("Live Turtle Transfer progress and completion status");
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 }

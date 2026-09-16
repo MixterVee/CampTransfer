@@ -5,7 +5,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>CampTransferRelay</AssemblyName>
+    <AssemblyName>TurtleTransferRelay</AssemblyName>
     <RootNamespace>CampTransferRelay</RootNamespace>
   </PropertyGroup>
 </Project>

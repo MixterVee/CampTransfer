@@ -1,4 +1,4 @@
-name: Build CampTransfer
+name: Build Turtle Transfer
 
 on:
   workflow_dispatch:
@@ -25,5 +25,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CampTransfer-win-x64
-          path: publish/CampTransfer.exe
+          name: TurtleTransfer-win-x64
+          path: publish/TurtleTransfer.exe
