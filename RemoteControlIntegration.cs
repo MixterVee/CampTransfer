@@ -118,7 +118,7 @@ internal sealed class RemoteControlHub
 
         if (_form.IsDisposed)
         {
-            tcs.SetResult(new RemoteControlResult(false, "CampTransfer is closing."));
+            tcs.SetResult(new RemoteControlResult(false, "Turtle Transfer is closing."));
         }
         else if (_form.InvokeRequired)
         {
@@ -184,7 +184,7 @@ internal sealed class RemoteControlHub
             .Select(i => i?.ToString() ?? "")
             .FirstOrDefault(i => string.Equals(i, value, StringComparison.OrdinalIgnoreCase));
         if (string.IsNullOrWhiteSpace(match))
-            return new(false, "That upload limit is not available in CampTransfer.");
+            return new(false, "That upload limit is not available in Turtle Transfer.");
 
         _speedBox.Text = match;
         return new(true, $"Upload limit changed to {match}.");
@@ -242,7 +242,7 @@ internal sealed class RemotePairingDialog : Form
 {
     public RemotePairingDialog(RemoteControlSecurity security)
     {
-        Text = "Pair CampTransfer Remote";
+        Text = "Pair Turtle Transfer Remote";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -273,7 +273,7 @@ internal sealed class RemotePairingDialog : Form
 
         layout.Controls.Add(new Label
         {
-            Text = "Enter this one-time code in CampTransfer Remote. After pairing, the phone stores a private control token and you do not need to enter the code again.",
+            Text = "Enter this one-time code in Turtle Transfer Remote. After pairing, the phone stores a private control token and you do not need to enter the code again.",
             AutoSize = true,
             MaximumSize = new Size(460, 0),
             Margin = new Padding(0, 0, 0, 12)
